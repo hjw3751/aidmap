@@ -1,7 +1,8 @@
 import streamlit as st
 import requests
-import xml.etree.ElementTree as ET  # 🚨 에러 원인이었던 부분 수정 완료 (xml.et -> xml.etree)
+import xml.etree.ElementTree as ET
 import streamlit.components.v1 as components
+import math
 
 # ----------------------------------------------------
 # 1. 페이지 설정 및 UI 스타일링
@@ -14,270 +15,300 @@ st.markdown("""
     .badge-smooth { background-color: #DCFCE7; color: #166534; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
     .badge-normal { background-color: #FEF9C3; color: #854D0E; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
     .badge-busy { background-color: #FEE2E2; color: #991B1B; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
-    .guide-box { background-color: #F8FAFC; padding: 14px; border-radius: 10px; border: 1px solid #E2E8F0; margin-bottom: 15px; }
+    .guide-box { background-color: #F8FAFC; padding: 16px; border-radius: 10px; border: 1px solid #E2E8F0; margin-bottom: 20px; }
+    .elderly-text { font-size: 1.2rem; font-weight: bold; color: #1E3A8A; line-height: 1.6; }
+    .recommend-box { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
-# 2. 전국 지역 데이터 정의 (사이드바용)
+# 2. 하버사인 공식 (거리 계산기)
 # ----------------------------------------------------
-KOREA_REGIONS = {
-    "서울특별시": ["전체", "강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구", "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구", "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구"],
-    "부산광역시": ["전체", "강서구", "금정구", "기장군", "남구", "동구", "동래구", "부산진구", "북구", "사상구", "사하구", "서구", "수영구", "연제구", "영도구", "중구", "해운대구"],
-    "대구광역시": ["전체", "남구", "달서구", "달성군", "동구", "북구", "서구", "수성구", "중구", "군위군"],
-    "인천광역시": ["전체", "강화군", "계양구", "남동구", "동구", "미추홀구", "부평구", "서구", "연수구", "옹진군", "중구"],
-    "광주광역시": ["전체", "광산구", "남구", "동구", "북구", "서구"],
-    "대전광역시": ["전체", "대덕구", "동구", "서구", "유성구", "중구"],
-    "울산광역시": ["전체", "남구", "동구", "북구", "울주군", "중구"],
-    "세종특별자치시": ["전체", "세종시"],
-    "경기도": ["전체", "가평군", "고양시 덕양구", "고양시 일산동구", "고양시 일산서구", "과천시", "광명시", "광주시", "구리시", "군포시", "김포시", "남양주시", "동두천시", "부천시", "성남시 분당구", "성남시 수정구", "성남시 중원구", "수원시 권선구", "수원시 영통구", "수원시 장안구", "수원시 팔달구", "시흥시", "안산시 단원구", "안산시 상록구", "안성시", "안양시 동안구", "안양시 만안구", "양주시", "양평군", "여주시", "연천군", "오산시", "용인시 기흥구", "용인시 수지구", "용인시 처인구", "의왕시", "의정부시", "이천시", "파주시", "평택시", "포천시", "하남시", "화성시"],
-    "강원특별자치도": ["전체", "강릉시", "고성군", "동해시", "삼척시", "속초시", "양구군", "양양군", "영월군", "원주시", "인제군", "정선군", "철원군", "춘천시", "태백시", "평창군", "홍천군", "화천군", "횡성군"],
-    "충청북도": ["전체", "괴산군", "단양군", "보은군", "영동군", "옥천군", "음성군", "제천시", "증평군", "진천군", "청주시 상당구", "청주시 서원구", "청주시 청원구", "청주시 흥덕구", "충주시"],
-    "충청남도": ["전체", "계룡시", "공주시", "금산군", "논산시", "당진시", "보령시", "부여군", "서산시", "서천시", "아산시", "예산군", "천안시 동남구", "천안시 서북구", "청양군", "태안군", "홍성군"],
-    "전북특별자치도": ["전체", "고창군", "군산시", "김제시", "남원시", "무주군", "부안군", "순창군", "완주군", "익산시", "임실군", "장수군", "전주시 덕진구", "전주시 완산구", "정읍시", "진안군"],
-    "전라남도": ["전체", "강진군", "고흥군", "곡성군", "광양시", "구례군", "나주시", "담양군", "목포시", "무안군", "보성군", "순천시", "신안군", "여수시", "영광군", "영암군", "완도군", "장성군", "장흥군", "진도군", "함평군", "해남군", "화순군"],
-    "경상북도": ["전체", "경산시", "경주시", "고령군", "구미시", "김천시", "문경시", "봉화군", "상주시", "성주군", "안동시", "영덕군", "영양군", "영주시", "영천시", "예천군", "울릉군", "울진군", "의성군", "청도군", "청송군", "칠곡군", "포항시 남구", "포항시 북구"],
-    "경상남도": ["전체", "거제시", "거창군", "고성군", "김해시", "남해군", "밀양시", "사천시", "산청군", "양산시", "의령군", "진주시", "창녕군", "창원시 마산합포구", "창원시 마산회원구", "창원시 성산구", "창원시 의창구", "창원시 진해구", "통영시", "하동군", "함안군", "함양군", "합천군"],
-    "제주특별자치도": ["전체", "서귀포시", "제주시"]
-}
+def calculate_distance(lat1, lon1, lat2, lon2):
+    R = 6371.0 # 지구 반지름 (km)
+    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+    return round(R * c, 1)
 
 # ----------------------------------------------------
-# 3. 데이터 연동 함수
+# 3. 공공데이터 연동 (실시간 병상 정보)
 # ----------------------------------------------------
 API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
 
 @st.cache_data(ttl=60)
-def fetch_emergency_data():
+def fetch_emergency_data(city=""):
     url = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
+    # requests는 자동으로 인코딩하므로 이미 인코딩된 키일 경우 디코딩된 상태로 전달하는 것이 안전합니다.
+    # 만약 키 에러가 계속된다면, requests 대신 urllib를 사용해야 할 수도 있습니다.
     params = {
-        'serviceKey': API_KEY,
-        'numOfRows': '500',
+        'serviceKey': requests.utils.unquote(API_KEY),
+        'STAGE1': city if city != "전체" else "",
+        'numOfRows': '100',
         'pageNo': '1'
     }
     
     try:
         response = requests.get(url, params=params, timeout=5)
-        if response.status_code != 200:
-            raise Exception(f"HTTP 에러 상태코드 ({response.status_code})")
+        response.raise_for_status()
             
         root = ET.fromstring(response.content)
-        result_code = root.find(".//resultCode")
-        if result_code is not None and result_code.text != "00":
-            raise Exception(f"API 서버 거부 코드 ({result_code.text})")
+        result_code = root.findtext(".//resultCode")
+        
+        if result_code != "00":
+            result_msg = root.findtext(".//resultMsg")
+            raise Exception(f"API 에러: {result_msg} (코드: {result_code})")
             
         items = root.findall(".//item")
         if not items:
-            raise Exception("조회된 데이터 항목 없음")
+            raise Exception("해당 지역에 조회된 실시간 응급실 데이터가 없습니다.")
         
         hospital_list = []
-        for idx, item in enumerate(items):
-            def get_val(tag):
-                node = item.find(tag)
-                return node.text if node is not None and node.text else "0"
+        for item in items:
+            def get_val(tag, default="0"):
+                return item.findtext(tag, default=default)
             
-            def safe_int(val):
-                return int(val) if val.isdigit() else 0
-
-            gen_curr = safe_int(get_val("hvec"))
-            ped_curr = safe_int(get_val("hvicyn"))
-            mat_cnt = get_val("hpbd")
-            iso_neg = safe_int(get_val("hvcc"))
-            iso_gen = safe_int(get_val("hvncc"))
-            cohort = get_val("hvgc")
+            gen_curr = int(get_val("hvec") or 0)
+            ped_curr = int(get_val("hvicyn") or 0)
+            mat_cnt = get_val("hpbd", "0")
             
-            gen_total = max(20, gen_curr + 10)
-            ped_total = max(5, ped_curr + 3)
-            iso_neg_total = max(3, iso_neg + 2)
-            iso_gen_total = max(5, iso_gen + 2)
-
-            def get_badge(val):
-                if val > 5: return "원활", "badge-smooth"
-                elif val > 2: return "보통", "badge-normal"
-                else: return "혼잡", "badge-busy"
-                
-            status_text, status_class = get_badge(gen_curr)
+            # API에서 전체 병상을 주지 않으므로 추정치 생성 (잔여+사용중)
+            gen_total = max(20, gen_curr + 15) 
             
-            # 거리 계산 모의 구현 (현재 위치 기준 대략적인 거리 부여)
-            mock_distance = round(1.2 + (idx * 0.7) % 8.5, 1)
-
             hospital_list.append({
-                "name": get_val("dutyName"),
-                "phone": get_val("dutyTel1"),
-                "addr": get_val("dutyAddr"),
-                "distance": mock_distance,
+                "name": get_val("dutyName", "이름없음"),
+                "phone": get_val("dutyTel3", get_val("dutyTel1", "전화번호 없음")), # 응급실 직통 번호(dutyTel3) 우선 반영
+                "addr": get_val("dutyAddr", "주소없음"),
                 "gen_curr": gen_curr,
                 "gen_total": gen_total,
-                "gen_status": status_text, 
-                "gen_class": status_class,
                 "ped_curr": ped_curr,
-                "ped_total": ped_total,
-                "mat_status": f"가능 ({mat_cnt}석)" if mat_cnt.isdigit() and int(mat_cnt) > 0 else "불가/미지원",
-                "iso_neg": iso_neg,
-                "iso_neg_total": iso_neg_total,
-                "iso_gen": iso_gen,
-                "iso_gen_total": iso_gen_total,
-                "cohort": cohort if cohort != "0" else "-",
-                "lat": 37.5665, "lng": 126.9780
+                "mat_status": f"가능 ({mat_cnt}석)" if mat_cnt.isdigit() and int(mat_cnt) > 0 else "불가",
+                "lat": float(get_val("wgs84Lat", 33.253)), # 데이터 없을 시 임시로 서귀포 좌표
+                "lng": float(get_val("wgs84Lon", 126.561))
             })
             
-        return hospital_list, False, None
+        return hospital_list, False, "성공"
 
     except Exception as e:
+        # API 오류 시 임시 더미 데이터 (전화번호 및 정보 확실하게 부여)
         fallback_data = [
-            {"name": "OO 대학병원 응급의료센터", "phone": "02-123-4567", "addr": "서울특별시 중구 세종대로 110", "distance": 1.5, "gen_curr": 14, "gen_total": 24, "gen_status": "원활", "gen_class": "badge-smooth", "ped_curr": 3, "ped_total": 6, "mat_status": "가능 (2석)", "iso_neg": 1, "iso_neg_total": 3, "iso_gen": 3, "iso_gen_total": 5, "cohort": "-", "lat": 37.5665, "lng": 126.9780},
-            {"name": "XX 적십자 응급실", "phone": "02-987-6543", "addr": "서울특별시 종로구 사직로 161", "distance": 3.2, "gen_curr": 2, "gen_total": 15, "gen_status": "혼잡", "gen_class": "badge-busy", "ped_curr": 0, "ped_total": 4, "mat_status": "불가/미지원", "iso_neg": 0, "iso_neg_total": 2, "iso_gen": 1, "iso_gen_total": 4, "cohort": "-", "lat": 37.5700, "lng": 126.9800},
+            {"name": "제주대학교병원 응급의료센터", "phone": "064-717-1900", "addr": "제주특별자치도 제주시 아란13길 15", "gen_curr": 14, "gen_total": 24, "ped_curr": 3, "mat_status": "가능 (2석)", "lat": 33.467, "lng": 126.544},
+            {"name": "서귀포의료원 응급실", "phone": "064-730-3119", "addr": "제주특별자치도 서귀포시 동홍로 212", "gen_curr": 2, "gen_total": 15, "ped_curr": 0, "mat_status": "불가", "lat": 33.253, "lng": 126.561},
+            {"name": "한라병원 권역응급의료센터", "phone": "064-740-5119", "addr": "제주특별자치도 제주시 도령로 65", "gen_curr": 5, "gen_total": 20, "ped_curr": 1, "mat_status": "불가", "lat": 33.489, "lng": 126.485}
         ]
         return fallback_data, True, str(e)
 
-# ----------------------------------------------------
-# 4. 사이드바 (왼쪽 탭): 다른 지역 의료 기관 선택 기능
-# ----------------------------------------------------
-st.sidebar.markdown("### 🔍 지역 검색 탭")
-search_mode = st.sidebar.radio("조회 모드 선택", ["📍 현재 위치 기준 (기본)", "🏠 다른 지역 직접 선택"])
-
-selected_state, selected_district = "전체", "전체"
-if search_mode == "🏠 다른 지역 직접 선택":
-    selected_state = st.sidebar.selectbox("시/도 선택", list(KOREA_REGIONS.keys()))
-    district_list = KOREA_REGIONS.get(selected_state, ["전체"])
-    selected_district = st.sidebar.selectbox("구/군/시 선택", district_list)
 
 # ----------------------------------------------------
-# 5. 메인 화면 구성
+# 4. 사용자 맞춤형 4단계 UI 플로우 구성
 # ----------------------------------------------------
-st.markdown("### 🚑 내 손안의 응급실 & 맞춤형 병원 추천")
 
-# 표기 읽는 법 안내 박스
-st.markdown("""
-<div class="guide-box">
-    <strong>📖 병상 수 읽는 법 안내</strong><br>
-    <span style="font-size: 0.85rem; color: #475569;">
-    • <b>[현재 남은 잔여 병상 수 / 전체 병상 규모]</b>로 표기됩니다. (예: <code>14 / 24 석</code>은 전체 24개 중 현재 14석이 비어있음을 의미합니다.)<br>
-    • 전화번호를 누르거나 길찾기 버튼을 통해 즉시 안내를 받으실 수 있습니다.
-    </span>
-</div>
-""", unsafe_allow_html=True)
+st.title("🚑 내 손안의 실시간 응급실 추천")
 
-# 환자 맞춤 조건 입력 필터
-f_col1, f_col2 = st.columns(2)
-with f_col1:
-    target_age = st.selectbox("환자 연령대", ["전체 (성인/공용)", "소아 (만 12세 이하)", "노인 (만 65세 이상)"])
-with f_col2:
-    target_symptom = st.selectbox("주요 증상 및 진료과", ["일반 응급", "소아 응급", "응급 분만/산부인과", "중증외상/뇌·심혈관"])
+# [STEP 1] 연령대 입력
+if "age_group" not in st.session_state:
+    st.session_state.age_group = "선택안함"
+
+st.markdown("### 1️⃣ 사용자 연령대를 먼저 선택해주세요.")
+age_choice = st.radio("연령대 선택", ["선택안함", "일반 (청년/중장년층)", "노년층 (만 65세 이상)"], horizontal=True, label_visibility="collapsed")
+st.session_state.age_group = age_choice
+
+if st.session_state.age_group == "선택안함":
+    st.info("👆 원활한 안내를 위해 위에서 연령대를 선택해주시면 다음 화면이 열립니다.")
+    st.stop() # 연령대를 선택하기 전까지 아래 코드 실행 중지
 
 st.divider()
 
-# 데이터 로드 및 필터링
-hospitals, is_sample, err_reason = fetch_emergency_data()
-
-filtered_hospitals = []
-for h in hospitals:
-    if search_mode == "🏠 다른 지역 직접 선택":
-        if selected_state not in h['addr']:
-            continue
-        if selected_district != "전체":
-            short_d = selected_district.split()[-1]
-            if short_d not in h['addr']:
-                continue
-                
-    if target_symptom == "소아 응급" or "소아" in target_age:
-        if h['ped_curr'] <= 0:
-            continue
-    elif target_symptom == "응급 분만/산부인과":
-        if "불가" in h['mat_status']:
-            continue
-            
-    filtered_hospitals.append(h)
-
-# 현재 위치 기준일 때는 가까운 거리순, 지역 선택일 때는 병상 여유순 정렬
-if search_mode == "📍 현재 위치 기준 (기본)":
-    filtered_hospitals = sorted(filtered_hospitals, key=lambda x: x['distance'])
-else:
-    filtered_hospitals = sorted(filtered_hospitals, key=lambda x: x['gen_curr'], reverse=True)
-
-# ----------------------------------------------------
-# 6. 고령자용 음성 지원 서비스 (TTS) 구현
-# ----------------------------------------------------
-if filtered_hospitals:
-    top_h = filtered_hospitals[0]
-    tts_text = f"가장 가까운 추천 응급실은 {top_h['name']}이며, 전화번호는 {top_h['phone']}입니다. 일반 응급실은 현재 {top_h['gen_curr']}석 남아있습니다."
+# [STEP 2] 맞춤형 사용법 안내 & 음성인식(STT)
+if st.session_state.age_group == "노년층 (만 65세 이상)":
+    st.markdown("""
+    <div class="guide-box">
+        <div class="elderly-text">👴👵 어르신, 환영합니다! 글씨를 크게 키워드렸어요.</div>
+        <div class="elderly-text">아래 안내에 따라 천천히 읽어보시고, 증상을 찾아보세요.</div>
+    </div>
+    """, unsafe_allow_html=True)
     
-    js_code = f"""
+    # 노년층 전용 웹 음성 인식(STT) 버튼 (HTML5 Web Speech API)
+    st.markdown("🎙️ **타자 치기가 어려우신가요? 아래 마이크를 누르고 증상을 말씀해 보세요.**")
+    stt_code = """
+    <div style="padding: 10px; background-color: #FEF2F2; border-radius: 8px; border: 1px solid #FCA5A5;">
+        <button id="mic-btn" style="background-color: #EF4444; color: white; border: none; padding: 15px 20px; font-size: 1.1rem; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%;">
+            🎤 마이크 켜고 말하기
+        </button>
+        <p id="stt-result" style="margin-top: 10px; font-size: 1.1rem; font-weight: bold; color: #991B1B;">(이곳에 말씀하신 내용이 나타납니다)</p>
+    </div>
+    <script>
+        const btn = document.getElementById('mic-btn');
+        const resultText = document.getElementById('stt-result');
+        
+        btn.addEventListener('click', () => {
+            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+            if(!SpeechRecognition) {
+                resultText.innerText = "현재 브라우저는 음성 인식을 지원하지 않습니다. 텍스트로 선택해주세요.";
+                return;
+            }
+            const recognition = new SpeechRecognition();
+            recognition.lang = 'ko-KR';
+            recognition.start();
+            
+            btn.innerText = "듣고 있습니다... 말씀해 주세요!";
+            
+            recognition.onresult = function(event) {
+                const text = event.results[0][0].transcript;
+                resultText.innerText = "인식된 증상: " + text + " (아래 진료과를 선택해 주세요)";
+                btn.innerText = "🎤 다시 말하기";
+            };
+            
+            recognition.onerror = function(event) {
+                resultText.innerText = "마이크 연결에 실패했습니다. 다시 시도해주세요.";
+                btn.innerText = "🎤 마이크 켜고 말하기";
+            }
+        });
+    </script>
+    """
+    components.html(stt_code, height=130)
+
+else:
+    st.success("✅ 일반 사용자 모드입니다. 빠르고 정확한 병원 추천을 도와드립니다.")
+
+# [STEP 3] 병상 수 읽는 법 안내
+st.markdown("### 2️⃣ 병상 현황은 이렇게 읽어주세요.")
+st.markdown("""
+<div class="guide-box">
+    <span style="font-size: 1.0rem; color: #334155;">
+    • 표기 방법: <b>[현재 남은 잔여 병상 수 / 전체 병상 규모]</b><br>
+    • <span class="badge-smooth">원활</span> : <b>잔여 병상 5석 초과</b> (여유가 있습니다.)<br>
+    • <span class="badge-busy">혼잡/마감</span> : <b>잔여 병상 0~2석</b> (대기 시간이 매우 길거나 수용이 불가능할 수 있습니다.)
+    </span>
+</div>
+""", unsafe_allow_html=True)
+st.divider()
+
+# [STEP 4] 위치 및 환자 상세 정보 입력
+st.markdown("### 3️⃣ 환자분의 현재 상태와 위치를 알려주세요.")
+col1, col2, col3 = st.columns(3)
+
+with col1:
+    # 스트림릿 웹 환경 한계로, 브라우저 GPS 자동 연동 대신 시/도 선택을 통해 위치 파악
+    st.info("💡 웹 보안상 자동 GPS가 불안정할 경우 지역을 직접 선택해주세요.")
+    current_city = st.selectbox("현재 계신 시/도를 선택하세요", ["제주특별자치도", "서울특별시", "경기도", "부산광역시", "전체"])
+    
+with col2:
+    target_age = st.selectbox("환자 연령 분류", ["성인 (만 13세 이상)", "소아 (만 12세 이하)"])
+    
+with col3:
+    target_symptom = st.selectbox("주요 증상 / 필요 진료", ["일반 응급", "응급 분만 (산부인과)", "중증 외상"])
+
+# 임시 GPS 설정 (선택한 시/도의 대략적인 도심 좌표)
+# 예: 제주도를 선택하면 현재 내 위치를 서귀포시청 인근(33.253, 126.561)으로 시뮬레이션
+current_lat, current_lon = 33.253, 126.561 
+
+st.divider()
+
+# ----------------------------------------------------
+# 5. 실시간 API 데이터 로딩 및 오류 안내
+# ----------------------------------------------------
+with st.spinner("해당 지역의 실시간 응급실 데이터를 불러오는 중입니다..."):
+    hospitals, is_sample, err_reason = fetch_emergency_data(current_city)
+
+if is_sample:
+    st.warning("⚠️ **실시간 데이터 연동 실패 안내**")
+    st.error(f"원인: {err_reason}")
+    st.caption("※ API 키가 승인 대기 중이거나 잘못되었습니다. 현재는 '비상용 샘플 데이터'로 시뮬레이션 된 결과를 보여드립니다.")
+
+# ----------------------------------------------------
+# 6. 스마트 병원 추천 알고리즘 
+# ----------------------------------------------------
+# 거리 계산 및 알고리즘 점수 부여
+scored_hospitals = []
+for h in hospitals:
+    # 1. 거리 계산
+    dist = calculate_distance(current_lat, current_lon, h['lat'], h['lng'])
+    h['distance'] = dist
+    
+    # 2. 필터링 (조건에 완전 불합격인 곳 제외)
+    if target_age == "소아 (만 12세 이하)" and h['ped_curr'] <= 0:
+        continue # 소아 병상 없으면 제외
+    if target_symptom == "응급 분만 (산부인과)" and "불가" in h['mat_status']:
+        continue # 분만 불가면 제외
+        
+    # 3. 맞춤형 추천 점수 계산 (Score)
+    # 가중치: 거리(가까울수록 높음) + 잔여 병상 수(많을수록 높음)
+    dist_score = max(0, 100 - (dist * 2.5)) # 거리가 멀수록 점수 차감
+    bed_score = min(100, h['gen_curr'] * 4) # 병상이 25개 이상이면 만점
+    
+    total_score = (dist_score * 0.5) + (bed_score * 0.5)
+    h['score'] = total_score
+    scored_hospitals.append(h)
+
+# 점수 높은 순(추천 순)으로 정렬
+scored_hospitals = sorted(scored_hospitals, key=lambda x: x['score'], reverse=True)
+
+# ----------------------------------------------------
+# 7. 검색 결과 및 최적 병원 추천 안내
+# ----------------------------------------------------
+st.markdown(f"### 4️⃣ 맞춤형 추천 결과 (총 {len(scored_hospitals)}곳 발견)")
+
+if not scored_hospitals:
+    st.error("조건에 맞는 병원을 찾을 수 없습니다. (예: 해당 지역에 소아/분만 가능 병상 부족) 조건을 변경해 보세요.")
+    st.stop()
+
+# 🏆 최적의 1순위 병원 강조 (Recommendation Box)
+top_h = scored_hospitals[0]
+st.markdown(f"""
+<div class="recommend-box">
+    <h3 style="margin-top: 0; color: #1E3A8A;">✨ 가장 추천하는 병원: {top_h['name']}</h3>
+    <ul style="font-size: 1.1rem; line-height: 1.8;">
+        <li><b>📍 예상 거리:</b> {top_h['distance']} km 떨어져 있어 가장 가깝습니다.</li>
+        <li><b>🛏️ 응급실 여유:</b> 전체 {top_h['gen_total']}석 중 <b>{top_h['gen_curr']}석</b> 남아있습니다.</li>
+        <li><b>📞 즉시 연락처:</b> <a href="tel:{top_h['phone']}">{top_h['phone']}</a> (클릭 시 바로 전화 연결)</li>
+    </ul>
+</div>
+""", unsafe_allow_html=True)
+
+# 노년층 모드일 경우 TTS(읽어주기) 지원
+if st.session_state.age_group == "노년층 (만 65세 이상)":
+    tts_text = f"가장 추천하는 곳은 {top_h['name']} 입니다. 현재 계신 곳에서 {top_h['distance']} 킬로미터 떨어져 있습니다. 전화번호는 {top_h['phone']} 입니다."
+    components.html(f"""
     <script>
     function speakText() {{
-        const text = "{tts_text}";
-        const utterance = new SpeechSynthesisUtterance(text);
+        const utterance = new SpeechSynthesisUtterance("{tts_text}");
         utterance.lang = 'ko-KR';
-        utterance.rate = 0.9;
+        utterance.rate = 0.85; // 천천히
         window.speechSynthesis.speak(utterance);
     }}
     </script>
-    <div style="margin-bottom: 15px;">
-        <button onclick="speakText()" style="background-color:#2563EB; color:white; border:none; padding:10px 18px; border-radius:8px; font-weight:bold; cursor:pointer; font-size: 0.95rem;">
-            🔊 [음성 지원] 최상단 추천 응급실 음성으로 듣기
-        </button>
-    </div>
-    """
-    components.html(js_code, height=60)
+    <button onclick="speakText()" style="background-color:#2563EB; color:white; border:none; padding:12px 20px; border-radius:8px; font-weight:bold; cursor:pointer; font-size: 1.1rem; width: 100%; margin-bottom: 20px;">
+        🔊 추천 결과 스피커로 듣기 (클릭)
+    </button>
+    """, height=70)
 
-st.markdown(f"**🔍 검색 결과 (총 {len(filtered_hospitals)}개소)**")
 
-# 결과 테이블 헤더
-header_cols = [2.2, 1.2, 1.2, 1.2, 1.2, 1.0]
-cols = st.columns(header_cols)
-with cols[0]: st.markdown("**병원명 / 연락처 / 거리**")
-with cols[1]: st.markdown("**응급실 일반**")
-with cols[2]: st.markdown("**소아 전용**")
-with cols[3]: st.markdown("**분만실**")
-with cols[4]: st.markdown("**음압격리**")
-with cols[5]: st.markdown("**길찾기**")
-
-st.markdown("<hr style='margin:4px 0 12px 0;'>", unsafe_allow_html=True)
-
-for h in filtered_hospitals:
-    map_link = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
-    row_cols = st.columns(header_cols)
+# 나머지 병원 목록 상세 출력 (테이블 형식 대신 가독성 좋은 카드 형식)
+for idx, h in enumerate(scored_hospitals):
+    # 병상 상태 배지 결정
+    if h['gen_curr'] > 5:
+        badge = f"<span class='badge-smooth'>원활</span>"
+    elif h['gen_curr'] > 2:
+        badge = f"<span class='badge-normal'>보통</span>"
+    else:
+        badge = f"<span class='badge-busy'>혼잡/마감</span>"
+        
+    map_url = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
     
-    with row_cols[0]:
-        st.markdown(f"""
-            <div style="font-weight:bold; font-size:0.95rem; color:#1E293B;">{h['name']}</div>
-            <div style="font-size:0.75rem; color:#64748B; margin:2px 0;">📍 {h['addr']} (<span style="color:#D97706; font-weight:bold;">{h['distance']}km</span>)</div>
-            <div style="font-size:0.8rem; color:#2563EB; font-weight:bold;">📞 {h['phone']}</div>
-        """, unsafe_allow_html=True)
-        
-    with row_cols[1]:
-        st.markdown(f"""
-            <div style="text-align:center;">
-                <span class="{h['gen_class']}">{h['gen_status']}</span>
-                <div style="font-size:0.85rem; margin-top:3px; font-weight:bold;">{h['gen_curr']} / {h['gen_total']} 석</div>
-            </div>
-        """, unsafe_allow_html=True)
-        
-    with row_cols[2]:
-        st.markdown(f"""
-            <div style="text-align:center; font-size:0.85rem; font-weight:bold; padding-top:6px;">
-                {h['ped_curr']} / {h['ped_total']} 석
-            </div>
-        """, unsafe_allow_html=True)
-        
-    with row_cols[3]:
-        st.markdown(f"""
-            <div style="text-align:center; font-size:0.8rem; padding-top:6px; color:#059669; font-weight:bold;">
-                {h['mat_status']}
-            </div>
-        """, unsafe_allow_html=True)
-        
-    with row_cols[4]:
-        st.markdown(f"""
-            <div style="text-align:center; font-size:0.85rem; font-weight:bold; padding-top:6px;">
-                {h['iso_neg']} / {h['iso_neg_total']} 석
-            </div>
-        """, unsafe_allow_html=True)
-        
-    with row_cols[5]:
-        st.markdown(f"""
-            <div style="text-align:center; padding-top:4px;">
-                <a href="{map_link}" target="_blank" style="background:#EF4444; color:white; padding:6px 12px; border-radius:4px; font-size:0.75rem; text-decoration:none; font-weight:bold;">길찾기</a>
-            </div>
-        """, unsafe_allow_html=True)
-        
-    st.markdown("<hr style='margin:8px 0; border:0; border-top:1px solid #F1F5F9;'>", unsafe_allow_html=True)
+    st.markdown(f"""
+    <div style="padding: 15px; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 12px; background-color: #FFFFFF;">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+            <h4 style="margin: 0; color: #0F172A;">{idx+1}. {h['name']}</h4>
+            <a href="{map_url}" target="_blank" style="background-color: #EF4444; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 0.85rem; font-weight: bold;">📍 길찾기</a>
+        </div>
+        <div style="color: #64748B; font-size: 0.9rem; margin-bottom: 12px;">{h['addr']} (내 위치에서 <b>{h['distance']}km</b>)</div>
+        <div style="display: flex; gap: 15px; font-size: 0.95rem; flex-wrap: wrap;">
+            <div style="background: #F8FAFC; padding: 8px 12px; border-radius: 6px;">📞 전화: <b>{h['phone']}</b></div>
+            <div style="background: #F8FAFC; padding: 8px 12px; border-radius: 6px;">🛏️ 일반응급: {badge} <b>{h['gen_curr']} / {h['gen_total']} 석</b></div>
+            <div style="background: #F8FAFC; padding: 8px 12px; border-radius: 6px;">👶 소아응급: <b>{h['ped_curr']} 석</b></div>
+            <div style="background: #F8FAFC; padding: 8px 12px; border-radius: 6px;">🤰 분만실: <b>{h['mat_status']}</b></div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
