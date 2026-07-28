@@ -1,7 +1,6 @@
 import streamlit as st
 import requests
 import xml.etree.ElementTree as ET
-import math
 
 # ----------------------------------------------------
 # 1. 페이지 설정 및 UI 스타일링
@@ -41,24 +40,29 @@ KOREA_REGIONS = {
 }
 
 # ----------------------------------------------------
-# 3. 공공데이터 API 연동 함수 (구/군/시 필터 적용)
+# 3. 공공데이터 API 연동 함수 (params 방식 적용)
 # ----------------------------------------------------
 API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
 
 @st.cache_data(ttl=60)
 def fetch_emergency_data(stage1, stage2):
     url = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrRltmSttusInfo"
-    # STAGE1(시도) 필수, STAGE2(구군시)가 '전체'가 아니면 파라미터에 포함
-    query_url = f"{url}?serviceKey={API_KEY}&STAGE1={stage1}&numOfRows=200&pageNo=1"
+    
+    # params 딕셔너리를 사용하여 404 및 인코딩 오류 원천 차단
+    params = {
+        'serviceKey': API_KEY,
+        'STAGE1': stage1,
+        'numOfRows': '200',
+        'pageNo': '1'
+    }
     
     try:
-        response = requests.get(query_url, timeout=5)
+        response = requests.get(url, params=params, timeout=5)
         if response.status_code != 200:
             return [], f"HTTP 연결 에러 (상태코드: {response.status_code})"
             
         root = ET.fromstring(response.content)
         
-        # API 서버에서 반환하는 에러 코드 체크
         result_code = root.find(".//resultCode")
         result_msg = root.find(".//resultMsg")
         if result_code is not None and result_code.text != "00":
@@ -77,10 +81,8 @@ def fetch_emergency_data(stage1, stage2):
             
             duty_addr = get_val("dutyAddr")
             
-            # 사용자가 세부 구/군/시를 골랐다면 해당 주소에 포함되는지 필터링
             if stage2 != "전체":
-                # 예: '강남구'가 주소에 포함되지 않으면 건너뜀 (단, 행정구 명칭 유연성 고려)
-                short_stage2 = stage2.split()[-1] # '고양시 덕양구' -> '덕양구' 등 대응
+                short_stage2 = stage2.split()[-1]
                 if short_stage2 not in duty_addr:
                     continue
             
@@ -120,7 +122,7 @@ def fetch_emergency_data(stage1, stage2):
         return [], f"시스템 예외 발생: {str(e)}"
 
 # ----------------------------------------------------
-# 4. 화면 UI 구성 (시/도 및 구/군/시 선택 콤보박스)
+# 4. 화면 UI 구성
 # ----------------------------------------------------
 st.markdown("### 🚑 응급실 가용 병상 실시간 조회")
 
@@ -147,16 +149,13 @@ else:
 
 st.divider()
 
-# 데이터 호출
 hospitals, err_msg = fetch_emergency_data(selected_state, selected_district)
 
 if err_msg:
-    st.error(f"🚨 **공공데이터 API 연동 에러 안내**\n\n{err_msg}\n\n"
-             f"💡 **해결 팁:** 만약 방금 공공데이터포털에서 인증키를 새로 발급받으셨다면, **서버에 반영되는 데 10분~30분 정도의 시간**이 소요됩니다. 잠시 후 다시 새로고침해 보세요!")
+    st.error(f"🚨 **API 연동 안내**\n\n{err_msg}")
 else:
     st.markdown(f"**[{selected_state} {selected_district}] 응급실 가용 병상 조회 (총 {len(hospitals)}건)**")
     
-    # 테이블 헤더 스타일
     header_cols = st.columns([2.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.0])
     with header_cols[0]: st.markdown("**기관 명 및 주소**")
     with header_cols[1]: st.markdown("**응급실일반**")
@@ -168,10 +167,8 @@ else:
     
     st.markdown("<hr style='margin:4px 0 12px 0;'>", unsafe_allow_html=True)
 
-    # 병원 리스트 렌더링
     for h in hospitals:
         map_link = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
-        
         row_cols = st.columns([2.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.0])
         
         with row_cols[0]:
