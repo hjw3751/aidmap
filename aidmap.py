@@ -1,6 +1,6 @@
 import streamlit as st
 import requests
-import xml.et.ElementTree as ET
+import xml.etree.ElementTree as ET  # 🚨 에러 원인이었던 부분 수정 완료 (xml.et -> xml.etree)
 import streamlit.components.v1 as components
 
 # ----------------------------------------------------
