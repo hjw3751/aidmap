@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ET
 # ----------------------------------------------------
 # 1. 페이지 설정 및 UI 스타일링
 # ----------------------------------------------------
-st.set_page_config(page_title="내 손안의 응급실 (실시간 연동)", page_icon="🚑", layout="wide")
+st.set_page_config(page_title="내 손안의 응급실", page_icon="🚑", layout="wide")
 
 st.markdown("""
 <style>
@@ -40,15 +40,14 @@ KOREA_REGIONS = {
 }
 
 # ----------------------------------------------------
-# 3. 안전 장치가 포함된 API 연동 함수 (실패 시 샘플 데이터 자동 반환)
+# 3. 데이터 연동 함수 (문서 기준 오퍼레이션 이름 적용 완료)
 # ----------------------------------------------------
 API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
 
 @st.cache_data(ttl=60)
 def fetch_emergency_data(stage1, stage2):
-    # HTTPS로 변경하여 404 및 보안 이슈 방어
-    url = "https://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrRltmSttusInfo"
-    
+    # 404 에러 방지를 위해 문서에 기재된 정확한 서비스 URL 및 오퍼레이션 명칭 적용[cite: 1]
+    url = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
     params = {
         'serviceKey': API_KEY,
         'STAGE1': stage1,
@@ -58,20 +57,17 @@ def fetch_emergency_data(stage1, stage2):
     
     try:
         response = requests.get(url, params=params, timeout=3)
-        
-        # 404 에러나 기타 HTTP 에러 발생 시 예외 처리로 점프
         if response.status_code != 200:
-            raise Exception(f"HTTP 에러 코드: {response.status_code}")
+            raise Exception(f"HTTP 에러 상태코드 ({response.status_code})")
             
         root = ET.fromstring(response.content)
         result_code = root.find(".//resultCode")
-        
         if result_code is not None and result_code.text != "00":
-            raise Exception(f"API 서버 거부 코드: {result_code.text}")
+            raise Exception(f"API 서버 거부 코드 ({result_code.text})")
             
         items = root.findall(".//item")
         if not items:
-            raise Exception("데이터 없음")
+            raise Exception("조회된 데이터 항목 없음")
         
         hospital_list = []
         for item in items:
@@ -113,20 +109,15 @@ def fetch_emergency_data(stage1, stage2):
                 "lat": 37.5665, "lng": 126.9780
             })
             
-        if not hospital_list and stage2 != "전체":
-            # 필터링 결과가 없으면 전체 반환
-            pass
-        else:
-            return hospital_list, None
+        return hospital_list, False, None
 
     except Exception as e:
-        # --- [안전 장치] 서버 에러(404 등) 발생 시 보여줄 고품질 샘플 데이터 ---
         fallback_data = [
-            {"name": f"{stage1} 대학교병원 응급센터", "phone": "02-123-4567", "addr": f"{stage1} 에러방지구 응급로 1", "gen_curr": 16, "gen_status": "원활", "gen_class": "badge-smooth", "ped_curr": 3, "mat_status": "가능/3", "iso_neg": 1, "iso_gen": 4, "cohort": "-", "lat": 37.5665, "lng": 126.9780},
-            {"name": f"{stage1} 적십자병원 응급실", "phone": "02-987-6543", "addr": f"{stage1} 안심구 평화로 2", "gen_curr": 3, "gen_status": "혼잡", "gen_class": "badge-busy", "ped_curr": 0, "mat_status": "미지원", "iso_neg": 0, "iso_gen": 1, "cohort": "-", "lat": 37.5700, "lng": 126.9800},
-            {"name": f"{stage1} 쎈트럴 종합병원", "phone": "02-555-1111", "addr": f"{stage1} 행복구 중앙로 3", "gen_curr": 8, "gen_status": "보통", "gen_class": "badge-normal", "ped_curr": 2, "mat_status": "가능/1", "iso_neg": 1, "iso_gen": 2, "cohort": "-", "lat": 37.5600, "lng": 126.9700},
+            {"name": f"{stage1} 대학병원 응급의료센터", "phone": "02-123-4567", "addr": f"{stage1} 행복로 123", "gen_curr": 14, "gen_status": "원활", "gen_class": "badge-smooth", "ped_curr": 3, "mat_status": "가능/2", "iso_neg": 1, "iso_gen": 3, "cohort": "-", "lat": 37.5665, "lng": 126.9780},
+            {"name": f"{stage1} 적십자 응급실", "phone": "02-987-6543", "addr": f"{stage1} 평화로 45", "gen_curr": 2, "gen_status": "혼잡", "gen_class": "badge-busy", "ped_curr": 0, "mat_status": "미지원", "iso_neg": 0, "iso_gen": 1, "cohort": "-", "lat": 37.5700, "lng": 126.9800},
+            {"name": f"{stage1} 중앙종합병원 응급실", "phone": "02-555-1111", "addr": f"{stage1} 중앙로 78", "gen_curr": 6, "gen_status": "보통", "gen_class": "badge-normal", "ped_curr": 1, "mat_status": "가능/1", "iso_neg": 1, "iso_gen": 2, "cohort": "-", "lat": 37.5600, "lng": 126.9700},
         ]
-        return fallback_data, None
+        return fallback_data, True, str(e)
 
 # ----------------------------------------------------
 # 4. 화면 UI 구성
@@ -139,6 +130,7 @@ col_1, col_2, col_3 = st.columns([1.5, 1.5, 1.0])
 
 selected_state = "서울특별시"
 selected_district = "전체"
+radius_km = 10
 
 if tab_choice == "시/도 및 구/군/시 선택":
     with col_1:
@@ -150,13 +142,22 @@ else:
     with col_1:
         selected_state = st.selectbox("기준 시/도", list(KOREA_REGIONS.keys()), label_visibility="collapsed")
     with col_2:
-        radius_km = st.selectbox("반경 설정", [5, 10, 20, 30], index=1, label_visibility="collapsed")
+        radius_str = st.selectbox("반경 설정", ["5 km", "10 km", "20 km", "30 km"], index=1, label_visibility="collapsed")
+        radius_km = int(radius_str.replace(" km", ""))
     with col_3:
-        st.button("📍 현재위치", use_container_width=True)
+        if st.button("📍 현재위치", use_container_width=True):
+            st.toast("💡 '현재위치' 버튼은 브라우저 GPS 위치를 기반으로 주변 반경 내 응급실을 탐색하는 기능입니다.")
 
 st.divider()
 
-hospitals, err_msg = fetch_emergency_data(selected_state, selected_district)
+hospitals, is_sample, err_reason = fetch_emergency_data(selected_state, selected_district)
+
+if is_sample:
+    st.error(f"⚠️ **[공공데이터 서버 통신 에러 안내]**\n\n"
+             f"공공데이터 서버 경로 오류(404 등)로 인해 실시간 데이터를 가져오지 못했습니다. (원인: `{err_reason}`)\n\n"
+             f"🛡️ **안내:** 앱 구동을 위해 임시 **샘플 데이터**를 화면에 출력 중입니다.")
+else:
+    st.success("✨ 공공데이터 서버에서 실시간 응급실 정보를 정상적으로 불러왔습니다!")
 
 st.markdown(f"**[{selected_state} {selected_district}] 응급실 가용 병상 조회 (총 {len(hospitals)}건)**")
 
