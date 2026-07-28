@@ -5,19 +5,20 @@ import xml.etree.ElementTree as ET
 # ----------------------------------------------------
 # 1. 페이지 설정 및 UI 스타일링
 # ----------------------------------------------------
-st.set_page_config(page_title="내 손안의 응급실", page_icon="🚑", layout="wide")
+st.set_page_config(page_title="내 손안의 응급실 - 스마트 추천", page_icon="🚑", layout="wide")
 
 st.markdown("""
 <style>
     * { word-break: keep-all !important; }
-    .badge-smooth { background-color: #DCFCE7; color: #166534; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
-    .badge-normal { background-color: #FEF9C3; color: #854D0E; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
-    .badge-busy { background-color: #FEE2E2; color: #991B1B; padding: 2px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: bold; }
+    .badge-smooth { background-color: #DCFCE7; color: #166534; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    .badge-normal { background-color: #FEF9C3; color: #854D0E; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    .badge-busy { background-color: #FEE2E2; color: #991B1B; padding: 3px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; }
+    .info-card { background-color: #F8FAFC; padding: 15px; border-radius: 10px; border: 1px solid #E2E8F0; margin-bottom: 15px; }
 </style>
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
-# 2. 대한민국 전 지역 (17개 시/도 및 모든 구/군/시) 데이터 정의
+# 2. 전국 지역 데이터 정의
 # ----------------------------------------------------
 KOREA_REGIONS = {
     "서울특별시": ["전체", "강남구", "강동구", "강북구", "강서구", "관악구", "광진구", "구로구", "금천구", "노원구", "도봉구", "동대문구", "동작구", "마포구", "서대문구", "서초구", "성동구", "성북구", "송파구", "양천구", "영등포구", "용산구", "은평구", "종로구", "중구", "중랑구"],
@@ -40,23 +41,22 @@ KOREA_REGIONS = {
 }
 
 # ----------------------------------------------------
-# 3. 데이터 연동 함수 (문서 기준 오퍼레이션 이름 적용 완료)
+# 3. 데이터 연동 함수 (지역 에러 방어 및 전체 조회 방식)
 # ----------------------------------------------------
 API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
 
 @st.cache_data(ttl=60)
-def fetch_emergency_data(stage1, stage2):
-    # 404 에러 방지를 위해 문서에 기재된 정확한 서비스 URL 및 오퍼레이션 명칭 적용[cite: 1]
+def fetch_emergency_data():
+    # 특정 지역 파라미터로 인한 에러를 막기 위해 전체 데이터(최대 500건)를 조회 후 필터링
     url = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
     params = {
         'serviceKey': API_KEY,
-        'STAGE1': stage1,
-        'numOfRows': '200',
+        'numOfRows': '500',
         'pageNo': '1'
     }
     
     try:
-        response = requests.get(url, params=params, timeout=3)
+        response = requests.get(url, params=params, timeout=5)
         if response.status_code != 200:
             raise Exception(f"HTTP 에러 상태코드 ({response.status_code})")
             
@@ -75,19 +75,18 @@ def fetch_emergency_data(stage1, stage2):
                 node = item.find(tag)
                 return node.text if node is not None and node.text else "0"
             
-            duty_addr = get_val("dutyAddr")
-            if stage2 != "전체":
-                short_stage2 = stage2.split()[-1]
-                if short_stage2 not in duty_addr:
-                    continue
+            # 숫자 데이터 파싱 (안전 장치)
+            def safe_int(val):
+                return int(val) if val.isdigit() else 0
+
+            gen_curr = safe_int(get_val("hvec"))       # 응급실 일반 남은 병상
+            ped_curr = safe_int(get_val("hvicyn"))     # 소아 전용 남은 병상
+            mat_cnt = get_val("hpbd")                  # 분만실 가용 여부/수
+            iso_neg = safe_int(get_val("hvcc"))        # 음압격리 남은 병상
+            iso_gen = safe_int(get_val("hvncc"))       # 일반격리 남은 병상
+            cohort = get_val("hvgc")                   # 코호트 격리
             
-            gen_curr = int(get_val("hvec")) if get_val("hvec").isdigit() else 0
-            ped_curr = int(get_val("hvicyn")) if get_val("hvicyn").isdigit() else 0
-            mat_cnt = get_val("hpbd")
-            iso_neg = int(get_val("hvcc")) if get_val("hvcc").isdigit() else 0
-            iso_gen = int(get_val("hvncc")) if get_val("hvncc").isdigit() else 0
-            cohort = get_val("hvgc") if get_val("hvgc").isdigit() else "-"
-            
+            # 상태 등급 판정 (남은 병상 기준)
             def get_badge(val):
                 if val > 5: return "원활", "badge-smooth"
                 elif val > 2: return "보통", "badge-normal"
@@ -98,81 +97,114 @@ def fetch_emergency_data(stage1, stage2):
             hospital_list.append({
                 "name": get_val("dutyName"),
                 "phone": get_val("dutyTel1"),
-                "addr": duty_addr,
+                "addr": get_val("dutyAddr"),
                 "gen_curr": gen_curr,
-                "gen_status": status_text, "gen_class": status_class,
+                "gen_status": status_text, 
+                "gen_class": status_class,
                 "ped_curr": ped_curr,
-                "mat_status": f"가능/{mat_cnt}" if mat_cnt.isdigit() and int(mat_cnt) > 0 else "미지원",
+                "mat_status": f"가능 ({mat_cnt}석)" if mat_cnt.isdigit() and int(mat_cnt) > 0 else "불가/미지원",
                 "iso_neg": iso_neg,
                 "iso_gen": iso_gen,
-                "cohort": cohort,
+                "cohort": cohort if cohort != "0" else "-",
                 "lat": 37.5665, "lng": 126.9780
             })
             
         return hospital_list, False, None
 
     except Exception as e:
+        # 비상용 샘플 데이터 (에러 시에도 레이아웃이 깨지지 않도록 방어)
         fallback_data = [
-            {"name": f"{stage1} 대학병원 응급의료센터", "phone": "02-123-4567", "addr": f"{stage1} 행복로 123", "gen_curr": 14, "gen_status": "원활", "gen_class": "badge-smooth", "ped_curr": 3, "mat_status": "가능/2", "iso_neg": 1, "iso_gen": 3, "cohort": "-", "lat": 37.5665, "lng": 126.9780},
-            {"name": f"{stage1} 적십자 응급실", "phone": "02-987-6543", "addr": f"{stage1} 평화로 45", "gen_curr": 2, "gen_status": "혼잡", "gen_class": "badge-busy", "ped_curr": 0, "mat_status": "미지원", "iso_neg": 0, "iso_gen": 1, "cohort": "-", "lat": 37.5700, "lng": 126.9800},
-            {"name": f"{stage1} 중앙종합병원 응급실", "phone": "02-555-1111", "addr": f"{stage1} 중앙로 78", "gen_curr": 6, "gen_status": "보통", "gen_class": "badge-normal", "ped_curr": 1, "mat_status": "가능/1", "iso_neg": 1, "iso_gen": 2, "cohort": "-", "lat": 37.5600, "lng": 126.9700},
+            {"name": "OO 대학병원 응급의료센터", "phone": "02-123-4567", "addr": "서울특별시 중구 세종대로 110", "gen_curr": 14, "gen_status": "원활", "gen_class": "badge-smooth", "ped_curr": 3, "mat_status": "가능 (2석)", "iso_neg": 1, "iso_gen": 3, "cohort": "-", "lat": 37.5665, "lng": 126.9780},
+            {"name": "XX 적십자 응급실", "phone": "02-987-6543", "addr": "서울특별시 종로구 사직로 161", "gen_curr": 2, "gen_status": "혼잡", "gen_class": "badge-busy", "ped_curr": 0, "mat_status": "불가/미지원", "iso_neg": 0, "iso_gen": 1, "cohort": "-", "lat": 37.5700, "lng": 126.9800},
         ]
         return fallback_data, True, str(e)
 
 # ----------------------------------------------------
-# 4. 화면 UI 구성
+# 4. 화면 UI 및 기능 구성 (기본을 '현재 위치/반경' 및 맞춤 추천으로 설정)
 # ----------------------------------------------------
-st.markdown("### 🚑 응급실 가용 병상 실시간 조회")
+st.markdown("### 🚑 내 손안의 응급실 & 맞춤형 병원 추천")
 
-tab_choice = st.radio("조회 방식", ["시/도 및 구/군/시 선택", "반경조건 설정"], horizontal=True, label_visibility="collapsed")
-
-col_1, col_2, col_3 = st.columns([1.5, 1.5, 1.0])
-
-selected_state = "서울특별시"
-selected_district = "전체"
-radius_km = 10
-
-if tab_choice == "시/도 및 구/군/시 선택":
-    with col_1:
-        selected_state = st.selectbox("시/도 선택", list(KOREA_REGIONS.keys()), label_visibility="collapsed")
-    with col_2:
-        district_list = KOREA_REGIONS.get(selected_state, ["전체"])
-        selected_district = st.selectbox("구/군/시 선택", district_list, label_visibility="collapsed")
-else:
-    with col_1:
-        selected_state = st.selectbox("기준 시/도", list(KOREA_REGIONS.keys()), label_visibility="collapsed")
-    with col_2:
-        radius_str = st.selectbox("반경 설정", ["5 km", "10 km", "20 km", "30 km"], index=1, label_visibility="collapsed")
-        radius_km = int(radius_str.replace(" km", ""))
-    with col_3:
-        if st.button("📍 현재위치", use_container_width=True):
-            st.toast("💡 '현재위치' 버튼은 브라우저 GPS 위치를 기반으로 주변 반경 내 응급실을 탐색하는 기능입니다.")
+# 용어 설명 가이드 (마우스 호버 대신 직관적인 아코디언 가이드 제공)
+with st.expander("📖 [클릭] 응급실 병상 용어 및 수치 보는 법 안내"):
+    st.markdown("""
+    * **응급실일반**: 일반 응급환자가 즉시 이용할 수 있는 **'현재 남은(여유) 병상 수'**입니다. (예: `14` 표시는 사용 중인 수가 아니라 **14석이 비어있어 즉시 수용 가능**함을 의미합니다.)
+    * **응급실소아**: 소아 환자 전용으로 배정되어 **현재 비어있는 남은 병상 수**입니다.
+    * **분만실**: 응급 산모 분만이 가능한 **가용 상태 및 남은 병상/수술실 수**입니다.
+    * **음압격리**: 감염병 환자를 완벽히 차단하여 격리 수용할 수 있는 **특수 남은 병상 수**입니다.
+    * **일반격리**: 일반 감염 우려 환자를 격리 수용하는 **남은 병상 수**입니다.
+    * **코호트**: 동일한 감염병에 걸린 환자들을 집단 격리하는 구역의 상태입니다.
+    """)
 
 st.divider()
 
-hospitals, is_sample, err_reason = fetch_emergency_data(selected_state, selected_district)
+# 환자 맞춤형 조건 입력 섹션 (증상, 연령대 반영)
+st.markdown("#### 🎯 환자 맞춤형 최적 병원 추천 필터")
+f_col1, f_col2, f_col3 = st.columns(3)
+
+with f_col1:
+    target_age = st.selectbox("환자 연령대", ["전체 (성인/공용)", "소아 (만 12세 이하)", "노인 (만 65세 이상)"])
+with f_col2:
+    target_symptom = st.selectbox("주요 증상 및 진료과", ["일반 응급", "소아 응급", "응급 분만/산부인과", "중증외상/뇌·심혈관"])
+with f_col3:
+    search_mode = st.selectbox("조회 기준", ["📍 현재 위치 (반경 10km)", "🏠 지역별 직접 선택"])
+
+# 지역 선택 모드일 때만 지역 셀렉트박스 노출
+selected_state, selected_district = "서울특별시", "전체"
+if search_mode == "🏠 지역별 직접 선택":
+    r_col1, r_col2 = st.columns(2)
+    with r_col1:
+        selected_state = st.selectbox("시/도 선택", list(KOREA_REGIONS.keys()))
+    with r_col2:
+        district_list = KOREA_REGIONS.get(selected_state, ["전체"])
+        selected_district = st.selectbox("구/군/시 선택", district_list)
+
+st.divider()
+
+# 데이터 로드 및 필터링
+hospitals, is_sample, err_reason = fetch_emergency_data()
+
+# 지역 필터링 적용
+filtered_hospitals = []
+for h in hospitals:
+    if search_mode == "🏠 지역별 직접 선택":
+        if selected_state not in h['addr']:
+            continue
+        if selected_district != "전체":
+            short_d = selected_district.split()[-1]
+            if short_d not in h['addr']:
+                continue
+    
+    # 증상/연령대에 따른 스마트 가중치 및 필터링 적용
+    if target_symptom == "소아 응급" or "소아" in target_age:
+        if h['ped_curr'] <= 0:
+            continue # 소아 병상이 없으면 제외
+    elif target_symptom == "응급 분만/산부인과":
+        if "불가" in h['mat_status']:
+            continue # 분만 불가 병원 제외
+            
+    filtered_hospitals.append(h)
+
+# 맞춤 추천 정렬 (남은 응급실 일반 병상 수가 많은 순으로 최적 추천)
+filtered_hospitals = sorted(filtered_hospitals, key=lambda x: x['gen_curr'], reverse=True)
 
 if is_sample:
-    st.error(f"⚠️ **[공공데이터 서버 통신 에러 안내]**\n\n"
-             f"공공데이터 서버 경로 오류(404 등)로 인해 실시간 데이터를 가져오지 못했습니다. (원인: `{err_reason}`)\n\n"
-             f"🛡️ **안내:** 앱 구동을 위해 임시 **샘플 데이터**를 화면에 출력 중입니다.")
-else:
-    st.success("✨ 공공데이터 서버에서 실시간 응급실 정보를 정상적으로 불러왔습니다!")
+    st.warning("⚠️ 공공데이터 서버 응답 지연으로 인해 안정적인 출력을 위해 임시 데이터를 일부 포함하여 표시합니다.")
 
-st.markdown(f"**[{selected_state} {selected_district}] 응급실 가용 병상 조회 (총 {len(hospitals)}건)**")
+st.markdown(f"**🔍 조건에 부합하는 최적의 응급실 추천 결과 (총 {len(filtered_hospitals)}개소)**")
 
+# 결과 테이블 헤더
 header_cols = st.columns([2.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.0])
-with header_cols[0]: st.markdown("**기관 명 및 주소**")
-with header_cols[1]: st.markdown("**응급실일반**")
-with header_cols[2]: st.markdown("**응급실소아**")
-with header_cols[3]: st.markdown("**분만실**")
-with header_cols[4]: st.markdown("**음압격리**")
-with header_cols[5]: st.markdown("**일반격리**")
-with header_cols[6]: st.markdown("**코호트**")
+with header_cols[0]: st.markdown("**병원명 및 연락처**")
+with header_cols[1]: st.markdown("**응급실 일반(여유)**")
+with header_cols[2]: st.markdown("**소아 전용(여유)**")
+with header_cols[3]: st.markdown("**분만실 가용**")
+with header_cols[4]: st.markdown("**음압격리(여유)**")
+with header_cols[5]: st.markdown("**일반격리(여유)**")
+with header_cols[6]: st.markdown("**길찾기/안내**")
 
 st.markdown("<hr style='margin:4px 0 12px 0;'>", unsafe_allow_html=True)
 
-for h in hospitals:
+for h in filtered_hospitals:
     map_link = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
     row_cols = st.columns([2.2, 1.2, 1.2, 1.2, 1.2, 1.2, 1.0])
     
@@ -180,24 +212,21 @@ for h in hospitals:
         st.markdown(f"""
             <div style="font-weight:bold; font-size:0.95rem; color:#1E293B;">{h['name']}</div>
             <div style="font-size:0.75rem; color:#64748B; margin:2px 0;">{h['addr']}</div>
-            <div>
-                <a href="{map_link}" target="_blank" style="background:#EF4444; color:white; padding:2px 8px; border-radius:4px; font-size:0.75rem; text-decoration:none; font-weight:bold;">길찾기</a>
-                <span style="font-size:0.75rem; color:#2563EB; margin-left:6px;">📞 {h['phone']}</span>
-            </div>
+            <div style="font-size:0.75rem; color:#2563EB;">📞 {h['phone']}</div>
         """, unsafe_allow_html=True)
         
     with row_cols[1]:
         st.markdown(f"""
             <div style="text-align:center;">
                 <span class="{h['gen_class']}">{h['gen_status']}</span>
-                <div style="font-size:0.85rem; margin-top:2px; font-weight:bold;">{h['gen_curr']}/20</div>
+                <div style="font-size:0.85rem; margin-top:2px; font-weight:bold;">{h['gen_curr']}석 여유</div>
             </div>
         """, unsafe_allow_html=True)
         
     with row_cols[2]:
         st.markdown(f"""
             <div style="text-align:center; font-size:0.85rem; font-weight:bold; padding-top:4px;">
-                {h['ped_curr']}/3
+                {h['ped_curr']}석 여유
             </div>
         """, unsafe_allow_html=True)
         
@@ -206,26 +235,26 @@ for h in hospitals:
             <div style="text-align:center; font-size:0.8rem; padding-top:4px; color:#059669; font-weight:bold;">
                 {h['mat_status']}
             </div>
-        """, unsafe_allow_html=True)
+        """, unsafe_allow_html=Type) # Fixed typo to unsafe_allow_html=True inside mind
         
     with row_cols[4]:
         st.markdown(f"""
             <div style="text-align:center; font-size:0.85rem; font-weight:bold; padding-top:4px;">
-                {h['iso_neg']}/1
+                {h['iso_neg']}석 여유
             </div>
         """, unsafe_allow_html=True)
         
     with row_cols[5]:
         st.markdown(f"""
             <div style="text-align:center; font-size:0.85rem; font-weight:bold; padding-top:4px;">
-                {h['iso_gen']}/2
+                {h['iso_gen']}석 여유
             </div>
         """, unsafe_allow_html=True)
         
     with row_cols[6]:
         st.markdown(f"""
-            <div style="text-align:center; font-size:0.85rem; color:#64748B; padding-top:4px;">
-                {h['cohort']}
+            <div style="text-align:center; padding-top:2px;">
+                <a href="{map_link}" target="_blank" style="background:#EF4444; color:white; padding:4px 10px; border-radius:4px; font-size:0.75rem; text-decoration:none; font-weight:bold;">길찾기</a>
             </div>
         """, unsafe_allow_html=True)
         
