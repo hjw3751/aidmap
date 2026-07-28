@@ -3,7 +3,6 @@ import requests
 import xml.etree.ElementTree as ET
 import streamlit.components.v1 as components
 import math
-import hashlib
 
 # ----------------------------------------------------
 # 1. 페이지 설정 및 UI 스타일링
@@ -24,7 +23,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ----------------------------------------------------
-# 2. 거리 계산 및 좌표 시뮬레이터
+# 2. 하버사인 공식 (거리 계산기)
 # ----------------------------------------------------
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0
@@ -34,88 +33,93 @@ def calculate_distance(lat1, lon1, lat2, lon2):
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 1)
 
-# API에서 좌표를 주지 않을 때, 병원 이름을 기반으로 고정된 가상 좌표(거리)를 생성하는 함수
-def generate_mock_coords(hospital_name, base_lat, base_lon):
-    h = int(hashlib.md5(hospital_name.encode()).hexdigest(), 16)
-    lat_offset = ((h % 100) - 50) / 1000.0  # 현재 위치 주변 -0.05 ~ +0.05 분산
-    lon_offset = (((h // 100) % 100) - 50) / 1000.0
-    return base_lat + lat_offset, base_lon + lon_offset
-
 # ----------------------------------------------------
-# 3. 공공데이터 연동 
+# 3. 공공데이터 연동 (기본정보 API + 실시간 API 병합)
 # ----------------------------------------------------
 API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
 
 @st.cache_data(ttl=60)
-def fetch_emergency_data(city, base_lat, base_lon):
-    url = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
-    params = {
-        'serviceKey': requests.utils.unquote(API_KEY),
+def fetch_real_emergency_data(city):
+    api_key_decoded = requests.utils.unquote(API_KEY)
+    
+    # [API 1] 응급의료기관 기본정보 (주소, 좌표, 전화번호 확보용)
+    url_basic = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getErmctInfoInqire"
+    params_basic = {
+        'serviceKey': api_key_decoded,
         'STAGE1': city if city != "전체" else "",
         'numOfRows': '100',
         'pageNo': '1'
     }
     
+    # [API 2] 실시간 병상정보 (잔여 병상수 확보용)
+    url_rt = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
+    params_rt = {
+        'serviceKey': api_key_decoded,
+        'STAGE1': city if city != "전체" else "",
+        'numOfRows': '100',
+        'pageNo': '1'
+    }
+    
+    hospital_dict = {}
+    
     try:
-        response = requests.get(url, params=params, timeout=5)
-        response.raise_for_status()
-        root = ET.fromstring(response.content)
+        # 1. 기본 정보 호출 및 파싱 (hpid를 키값으로 사용)
+        res_basic = requests.get(url_basic, params=params_basic, timeout=10)
+        res_basic.raise_for_status()
+        root_basic = ET.fromstring(res_basic.content)
         
-        result_code = root.findtext(".//resultCode")
-        if result_code != "00":
-            raise Exception(f"API 에러코드: {result_code}")
+        if root_basic.findtext(".//resultCode") != "00":
+            raise Exception("기본정보 API 오류: " + root_basic.findtext(".//resultMsg"))
             
-        items = root.findall(".//item")
-        if not items:
-            raise Exception("해당 지역에 조회된 실시간 응급실 데이터가 없습니다.")
-        
-        hospital_list = []
-        for item in items:
-            def get_val(tag, default="0"):
-                node = item.find(tag)
-                return node.text.strip() if node is not None and node.text else default
+        for item in root_basic.findall(".//item"):
+            hpid = item.findtext("hpid")
+            if not hpid: continue
             
-            # 전화번호 이중 확인 (직통번호 없으면 대표번호로 대체)
-            phone = get_val("dutyTel3", "")
-            if not phone: 
-                phone = get_val("dutyTel1", "정보 없음 (119 문의)")
+            # 위경도 데이터가 없는 병원은 제외 (가상 좌표 절대 사용 안함)
+            lat_str = item.findtext("wgs84Lat")
+            lon_str = item.findtext("wgs84Lon")
+            if not lat_str or not lon_str:
+                continue
                 
-            gen_curr = int(get_val("hvec", "0"))
+            hospital_dict[hpid] = {
+                "hpid": hpid,
+                "name": item.findtext("dutyName", "이름없음"),
+                "addr": item.findtext("dutyAddr", "주소없음"),
+                "phone": item.findtext("dutyTel3") or item.findtext("dutyTel1", "전화번호 없음"),
+                "lat": float(lat_str),
+                "lng": float(lon_str),
+                # 아래 값들은 실시간 API에서 채워짐 (기본값 세팅)
+                "gen_curr": 0, "ped_curr": 0, "mat_curr": 0, "has_realtime": False
+            }
             
-            # 소아 병상 (API 제공 태그 확인: hv28, hvicyn 등 혼재)
-            ped_curr = int(get_val("hv28", get_val("hvicyn", "0")))
-            mat_cnt = get_val("hpbd", "0")
+        # 2. 실시간 병상 정보 호출 및 병합
+        res_rt = requests.get(url_rt, params=params_rt, timeout=10)
+        res_rt.raise_for_status()
+        root_rt = ET.fromstring(res_rt.content)
+        
+        if root_rt.findtext(".//resultCode") != "00":
+            raise Exception("실시간 API 오류: " + root_rt.findtext(".//resultMsg"))
             
-            gen_total = max(20, gen_curr + 15)
+        for item in root_rt.findall(".//item"):
+            hpid = item.findtext("hpid")
+            if hpid in hospital_dict:
+                # hvec: 응급실 잔여, hvicyn: 소아응급 잔여, hpbd: 산부인과 잔여
+                hospital_dict[hpid]["gen_curr"] = int(item.findtext("hvec", "0"))
+                hospital_dict[hpid]["ped_curr"] = int(item.findtext("hvicyn", "0"))
+                hospital_dict[hpid]["mat_curr"] = int(item.findtext("hpbd", "0"))
+                hospital_dict[hpid]["has_realtime"] = True
+                
+        # 실시간 데이터가 매핑된 병원만 반환
+        final_list = [h for h in hospital_dict.values() if h["has_realtime"]]
+        
+        if not final_list:
+            raise Exception("조건에 맞는 병원 데이터가 없습니다. (API 응답 없음)")
             
-            # 좌표가 비어있다면 가상 좌표 생성
-            lat_str = get_val("wgs84Lat", "")
-            lon_str = get_val("wgs84Lon", "")
-            if not lat_str or float(lat_str) == 0.0:
-                h_lat, h_lon = generate_mock_coords(get_val("dutyName"), base_lat, base_lon)
-            else:
-                h_lat, h_lon = float(lat_str), float(lon_str)
-            
-            hospital_list.append({
-                "name": get_val("dutyName", "이름없음"),
-                "phone": phone,
-                "addr": get_val("dutyAddr", "주소 미상"),
-                "gen_curr": gen_curr,
-                "gen_total": gen_total,
-                "ped_curr": ped_curr,
-                "mat_status": f"가능 ({mat_cnt}석)" if mat_cnt.isdigit() and int(mat_cnt) > 0 else "불가",
-                "lat": h_lat,
-                "lng": h_lon
-            })
-            
-        return hospital_list, False, "성공"
+        return final_list, None
 
     except Exception as e:
-        fallback_data = [
-            {"name": "제주대학교병원 응급의료센터", "phone": "064-717-1900", "addr": "제주특별자치도 제주시 아란13길 15", "gen_curr": 14, "gen_total": 24, "ped_curr": 3, "mat_status": "가능 (2석)", "lat": 33.467, "lng": 126.544},
-            {"name": "서귀포의료원 응급실", "phone": "064-730-3119", "addr": "제주특별자치도 서귀포시 동홍로 212", "gen_curr": 2, "gen_total": 15, "ped_curr": 0, "mat_status": "불가", "lat": 33.253, "lng": 126.561},
-        ]
-        return fallback_data, True, str(e)
+        # 가상 데이터(Fallback) 전면 폐지 - 에러 발생 시 그대로 에러 반환
+        return [], str(e)
 
 
 # ----------------------------------------------------
@@ -174,7 +178,7 @@ st.markdown("### 2️⃣ 병상 현황 읽는 법")
 st.markdown("""
 <div class="guide-box" style="padding: 10px;">
     <span style="font-size: 0.95rem; color: #334155;">
-    • 표기: <b>[잔여 병상 수 / 전체 병상]</b> (예: 14/24석은 14석이 비어있음)<br>
+    • 표기: <b>[현재 확보된 잔여 병상 수]</b> (실제 사용 가능한 빈자리만 표시합니다.)<br>
     • 상태: <span class="badge-smooth">원활 (5석 초과)</span> | <span class="badge-busy">혼잡 (0~2석 남음)</span>
     </span>
 </div>
@@ -182,7 +186,7 @@ st.markdown("""
 st.divider()
 
 st.markdown("### 3️⃣ 환자분의 현재 상태와 위치")
-# 🔥 요청하신 대로 증상과 진료과를 명확히 분리했습니다.
+
 col1, col2, col3 = st.columns(3)
 with col1:
     current_city = st.selectbox("📍 현재 지역", ["제주특별자치도", "서울특별시", "경기도", "부산광역시", "전체"])
@@ -191,59 +195,74 @@ with col2:
 with col3:
     target_dept = st.selectbox("🏥 필요 진료과", ["응급의학과 (기본)", "소아청소년과", "산부인과", "외과/정형외과"])
 
-# 임시 GPS 기준 (선택한 지역별 중심 좌표 할당)
-locations = {"제주특별자치도": (33.393, 126.561), "서울특별시": (37.566, 126.978), "경기도": (37.275, 127.009)}
-current_lat, current_lon = locations.get(current_city, (36.5, 127.5))
+# ⚠️ 환자분의 현재 위치(서귀포시 동홍동)의 실제 좌표를 하드코딩 반영
+# 서귀포시 동홍동 좌표: 위도 33.2576, 경도 126.5656
+if current_city == "제주특별자치도":
+    st.info("📍 현재 위치가 **'제주특별자치도 서귀포시 동홍동'**으로 자동 설정되었습니다.")
+    current_lat, current_lon = 33.2576, 126.5656
+else:
+    # 다른 지역 선택 시 해당 지역의 도심 좌표 적용
+    locations = {"서울특별시": (37.566, 126.978), "경기도": (37.275, 127.009), "부산광역시": (35.179, 129.075)}
+    current_lat, current_lon = locations.get(current_city, (36.5, 127.5))
 
 st.divider()
 
 # ----------------------------------------------------
-# 5. 스마트 병원 추천 알고리즘 
+# 5. 스마트 병원 추천 알고리즘 (실제 데이터 기반)
 # ----------------------------------------------------
-with st.spinner("실시간 응급실 데이터를 불러오고 거리를 계산하는 중입니다..."):
-    hospitals, is_sample, err_reason = fetch_emergency_data(current_city, current_lat, current_lon)
+with st.spinner("100% 실제 공공데이터를 불러와 거리를 계산하는 중입니다..."):
+    hospitals, err_reason = fetch_real_emergency_data(current_city)
+
+if err_reason:
+    st.error("🚨 공공데이터 API 연동 중 오류가 발생했습니다.")
+    st.error(f"오류 내용: {err_reason}")
+    st.stop()
 
 scored_hospitals = []
 for h in hospitals:
+    # 하버사인 공식으로 실제 위경도 기반 거리 도출
     dist = calculate_distance(current_lat, current_lon, h['lat'], h['lng'])
     h['distance'] = dist
     
-    # 필수 조건 필터링 (공공데이터 누락 방어를 위해 완전 배제보다는 감점 처리)
+    # 0석인 특수 병상 필터링
     if target_dept == "소아청소년과" and h['ped_curr'] <= 0:
-        h['score'] = -50
-    elif target_dept == "산부인과" and "불가" in h['mat_status']:
-        h['score'] = -50
-    else:
-        # 거리(가까울수록 가점) + 잔여 병상(많을수록 가점)
-        dist_score = max(0, 100 - (dist * 2.5)) 
-        bed_score = min(100, h['gen_curr'] * 4) 
-        h['score'] = (dist_score * 0.6) + (bed_score * 0.4)
+        continue # 소아 병상 없으면 리스트에서 완전 제외
+    if target_dept == "산부인과" and h['mat_curr'] <= 0:
+        continue # 산부인과 병상 없으면 리스트에서 완전 제외
+        
+    # 점수 부여 (거리가 가깝고 잔여 병상이 많을수록 높음)
+    dist_score = max(0, 100 - (dist * 2.5)) 
+    bed_score = min(100, h['gen_curr'] * 4) 
+    h['score'] = (dist_score * 0.6) + (bed_score * 0.4)
     
-    # 🔥 추천 사유(Reason) 생성
+    # 추천 사유(Reason) 생성
     reasons = []
-    if dist < 5.0: reasons.append(f"거리({dist}km)가 매우 가깝고")
-    else: reasons.append(f"거리({dist}km)가 비교적 양호하며")
+    if dist < 3.0: reasons.append(f"거리({dist}km)가 매우 가깝고")
+    elif dist < 10.0: reasons.append(f"거리({dist}km)가 비교적 양호하며")
+    else: reasons.append(f"거리는 다소 멀지만({dist}km)")
         
-    if h['gen_curr'] > 5: reasons.append("응급 병상이 매우 여유롭습니다.")
-    elif h['gen_curr'] > 0: reasons.append("일반 진료가 가능한 상태입니다.")
-    else: reasons.append("현재 대기자가 많을 수 있습니다.")
+    if h['gen_curr'] > 5: reasons.append("일반 응급 잔여 병상이 여유롭습니다.")
+    elif h['gen_curr'] > 0: reasons.append("일반 응급 병상이 남아있습니다.")
+    else: reasons.append("일반 병상은 0석이지만 접수 확인이 필요합니다.")
         
-    if target_dept == "소아청소년과" and h['ped_curr'] > 0:
-        reasons.insert(1, "소아 전용 병상을 보유하고 있으며")
+    if target_dept == "소아청소년과":
+        reasons.insert(1, f"소아 병상이 {h['ped_curr']}석 남아있으며")
+    elif target_dept == "산부인과":
+        reasons.insert(1, f"분만실 병상이 {h['mat_curr']}석 남아있으며")
         
     h['reason'] = " ".join(reasons)
     scored_hospitals.append(h)
 
-# 점수순(추천순) 정렬 (음수 점수 제외)
-scored_hospitals = [h for h in sorted(scored_hospitals, key=lambda x: x['score'], reverse=True) if h['score'] >= 0]
+# 점수순(추천순) 정렬
+scored_hospitals = sorted(scored_hospitals, key=lambda x: x['score'], reverse=True)
 
 # ----------------------------------------------------
 # 6. 검색 결과 출력
 # ----------------------------------------------------
-st.markdown(f"### 4️⃣ 맞춤형 추천 결과 (총 {len(scored_hospitals)}곳 발견)")
+st.markdown(f"### 4️⃣ 맞춤형 추천 결과 (조건에 맞는 병원: 총 {len(scored_hospitals)}곳)")
 
 if not scored_hospitals:
-    st.warning("조건에 완벽히 맞는 병원을 찾지 못했습니다. 공공데이터에 특수 진료과(소아/분만) 정보가 등록되지 않은 지역일 수 있습니다. 진료과를 '응급의학과'로 변경해보세요.")
+    st.warning("조건에 맞는 병원을 찾지 못했습니다. (예: 현재 제주 지역에 잔여 소아/분만 병상이 0석인 경우) 진료과를 '응급의학과'로 변경해보세요.")
     st.stop()
 
 # 🏆 최적 1순위 병원 강조
@@ -253,14 +272,15 @@ st.markdown(f"""
     <h3 style="margin-top: 0; color: #1E3A8A;">✨ AI 최적 추천: {top_h['name']}</h3>
     <div class="reason-text">💡 <b>추천 이유:</b> {top_h['reason']}</div>
     <ul style="font-size: 1.05rem; line-height: 1.8; margin-top: 15px;">
-        <li><b>📍 예상 거리:</b> 약 <b>{top_h['distance']} km</b></li>
-        <li><b>🛏️ 응급실 여유:</b> 전체 {top_h['gen_total']}석 중 <b>{top_h['gen_curr']}석</b> 잔여</li>
-        <li><b>📞 병원 연락처:</b> <a href="tel:{top_h['phone']}">{top_h['phone']}</a></li>
+        <li><b>📍 실측 예상 거리:</b> 현재 동홍동 위치 기준 약 <b>{top_h['distance']} km</b></li>
+        <li><b>🛏️ 응급 잔여 병상:</b> 현재 <b>{top_h['gen_curr']}석</b> 비어있음</li>
+        <li><b>📞 병원 즉시 연락:</b> <a href="tel:{top_h['phone']}">{top_h['phone']}</a></li>
+        <li style="font-size: 0.95rem; color: #475569;">주소: {top_h['addr']}</li>
     </ul>
 </div>
 """, unsafe_allow_html=True)
 
-# 목록 출력
+# 목록 출력 (거짓 병상 수 비율 삭제, 순수 잔여 병상만 표시)
 for idx, h in enumerate(scored_hospitals):
     badge = "<span class='badge-smooth'>원활</span>" if h['gen_curr'] > 5 else ("<span class='badge-normal'>보통</span>" if h['gen_curr'] > 0 else "<span class='badge-busy'>혼잡/마감</span>")
     map_url = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
@@ -268,14 +288,15 @@ for idx, h in enumerate(scored_hospitals):
     st.markdown(f"""
     <div style="padding: 15px; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 12px;">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-            <h4 style="margin: 0;">{idx+1}. {h['name']} <span style="font-size: 0.8rem; color: #64748B;">({h['distance']}km)</span></h4>
+            <h4 style="margin: 0;">{idx+1}. {h['name']} <span style="font-size: 0.8rem; color: #64748B;">(직선거리 {h['distance']}km)</span></h4>
             <a href="{map_url}" target="_blank" style="background-color: #EF4444; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 0.8rem; font-weight: bold;">📍 길찾기</a>
         </div>
         <div style="font-size: 0.85rem; color: #475569; margin-bottom: 10px;">{h['addr']}</div>
         <div style="display: flex; gap: 10px; font-size: 0.9rem; flex-wrap: wrap;">
             <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">📞 {h['phone']}</div>
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">🛏️ 일반응급: {badge} <b>{h['gen_curr']}석</b></div>
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">👶 소아: <b>{h['ped_curr']}석</b></div>
+            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">🛏️ 일반응급 잔여: {badge} <b>{h['gen_curr']}석</b></div>
+            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">👶 소아 잔여: <b>{h['ped_curr']}석</b></div>
+            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">🤰 분만실 잔여: <b>{h['mat_curr']}석</b></div>
         </div>
     </div>
     """, unsafe_allow_html=True)
