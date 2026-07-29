@@ -27,12 +27,12 @@ service_key = st.sidebar.text_input("공공데이터 API 인증키 (ServiceKey)"
 st.sidebar.markdown("---")
 st.sidebar.info("💡 **병상 표기 안내**: 각 병원의 가용 응급실 잔여 병상 수와 상태가 실시간으로 반영됩니다.")
 
-# 3. 샘플(비상용) 데이터 정의 (API 오류나 키 미입력 시 정상 구동용)
+# 3. 샘플(비상용) 데이터 정의 (KeyError 방지를 위해 distance 키 추가)
 mock_data = [
-    {"dutyName": "제주대학교병원", "dutyTel1": "064-717-1114", "hvec": 14, "hvcc": 4, "lat": 33.489, "lng": 126.545},
-    {"dutyName": "제주한라병원", "dutyTel1": "064-740-5000", "hvec": 8, "hvcc": 2, "lat": 33.492, "lng": 126.487},
-    {"dutyName": "서귀포의료원", "dutyTel1": "064-730-3000", "hvec": 19, "hvcc": 5, "lat": 33.254, "lng": 126.560},
-    {"dutyName": "중앙병원", "dutyTel1": "064-786-7000", "hvec": 5, "hvcc": 1, "lat": 33.495, "lng": 126.510}
+    {"dutyName": "제주대학교병원", "dutyTel1": "064-717-1114", "hvec": 14, "hvcc": 4, "lat": 33.489, "lng": 126.545, "distance": 4.1},
+    {"dutyName": "제주한라병원", "dutyTel1": "064-740-5000", "hvec": 8, "hvcc": 2, "lat": 33.492, "lng": 126.487, "distance": 4.2},
+    {"dutyName": "서귀포의료원", "dutyTel1": "064-730-3000", "hvec": 19, "hvcc": 5, "lat": 33.254, "lng": 126.560, "distance": 27.5},
+    {"dutyName": "중앙병원", "dutyTel1": "064-786-7000", "hvec": 5, "hvcc": 1, "lat": 33.495, "lng": 126.510, "distance": 2.1}
 ]
 
 # 4. 거리 계산 함수 (Haversine Formula)
@@ -75,12 +75,20 @@ if xml_data:
     try:
         root = ET.fromstring(xml_data)
         items = root.findall('.//item')
+        
+        # 정상적으로 데이터를 불러왔으나 항목이 없는 경우 방어
+        if not items:
+            hospitals = mock_data
+            
         for item in items:
             name = item.find('dutyName').text if item.find('dutyName') is not None else "정보 없음"
             tel = item.find('dutyTel1').text if item.find('dutyTel1') is not None else "전화번호 없음"
             hvec = int(item.find('hvec').text) if item.find('hvec') is not None and item.find('hvec').text.isdigit() else 0
-            lat = float(item.find('wgs84Lat').text) if item.find('wgs84Lat') is not None and item.find('wgs84Lat').text else current_lat
-            lng = float(item.find('wgs84Lon').text) if item.find('wgs84Lon') is not None and item.find('wgs84Lon').text else current_lng
+            
+            lat_node = item.find('wgs84Lat')
+            lng_node = item.find('wgs84Lon')
+            lat = float(lat_node.text) if lat_node is not None and lat_node.text else current_lat
+            lng = float(lng_node.text) if lng_node is not None and lng_node.text else current_lng
             
             dist = calculate_distance(current_lat, current_lng, lat, lng)
             
@@ -95,8 +103,8 @@ if xml_data:
 else:
     hospitals = mock_data
 
-# 거리순 정렬
-hospitals = sorted(hospitals, key=lambda x: x["distance"])
+# 🚨 거리순 정렬 (KeyError 원천 차단: distance가 없을 경우 무한대로 처리하여 맨 뒤로 보냄)
+hospitals = sorted(hospitals, key=lambda x: x.get("distance", 99999))
 
 # 7. 화면 출력 구성
 st.subheader(f"📍 [{sido}] 주변 응급실 실시간 현황 (가까운 순)")
@@ -105,12 +113,12 @@ if hospitals:
     top_hospital = hospitals[0]
     
     # 고령자 접근성을 위한 웹 음성 지원(TTS) 버튼
-    tts_text = f"가장 가까운 응급실은 {top_hospital['dutyName']}이며, 전화번호는 {top_hospital['dutyTel1']} 입니다. 잔여 병상은 {top_hospital['hvec']}석 남았습니다."
+    tts_text = f"가장 가까운 응급실은 {top_hospital['dutyName']}이며, 전화번호는 {top_hospital['dutyTel1']} 입니다. 잔여 병상은 {top_hospital.get('hvec', 0)}석 남았습니다."
     
     st.markdown(f"""
     <div style="padding: 15px; border-radius: 10px; background-color: #f0f2f6; margin-bottom: 20px;">
         <h4>🎙️ 상단 추천 응급실 음성 안내 (고령자 지원)</h4>
-        <p><b>{top_hospital['dutyName']}</b> (거리: {top_hospital['distance']:.2f} km)</p>
+        <p><b>{top_hospital['dutyName']}</b> (거리: {top_hospital.get('distance', 0):.2f} km)</p>
         <button onclick="
             const utterance = new SpeechSynthesisUtterance('{tts_text}');
             utterance.lang = 'ko-KR';
@@ -135,6 +143,6 @@ if hospitals:
                     value=f"{h.get('hvec', 0)} 석", 
                     delta="여유 있음" if h.get('hvec', 0) > 3 else "혼잡/부족"
                 )
-            st.markdown("---")
+        st.markdown("---")
 else:
     st.info("조회된 응급실 정보가 없습니다.")
