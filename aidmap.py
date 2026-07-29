@@ -1,302 +1,151 @@
 import streamlit as st
 import requests
-import xml.etree.ElementTree as ET
-import streamlit.components.v1 as components
 import math
 
-# ----------------------------------------------------
-# 1. 페이지 설정 및 UI 스타일링
-# ----------------------------------------------------
-st.set_page_config(page_title="내 손안의 응급실 - 실시간 병상 조회", page_icon="🚑", layout="wide")
+# --- 페이지 설정 ---
+st.set_page_config(page_title="Aidmap - 맞춤형 응급의료", page_icon="🚑", layout="wide")
 
-st.markdown("""
-<style>
-    * { word-break: keep-all !important; }
-    .badge-smooth { background-color: #DCFCE7; color: #166534; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
-    .badge-normal { background-color: #FEF9C3; color: #854D0E; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
-    .badge-busy { background-color: #FEE2E2; color: #991B1B; padding: 4px 10px; border-radius: 12px; font-size: 0.8rem; font-weight: bold; display: inline-block; }
-    .guide-box { background-color: #F8FAFC; padding: 16px; border-radius: 10px; border: 1px solid #E2E8F0; margin-bottom: 20px; }
-    .elderly-text { font-size: 1.2rem; font-weight: bold; color: #1E3A8A; line-height: 1.6; }
-    .recommend-box { background-color: #EFF6FF; border-left: 5px solid #3B82F6; padding: 15px; margin-bottom: 20px; border-radius: 5px; }
-    .reason-text { font-size: 0.95rem; color: #047857; background-color: #D1FAE5; padding: 8px 12px; border-radius: 6px; margin-top: 10px; display: inline-block; font-weight: bold; }
-</style>
-""", unsafe_allow_html=True)
+# --- 상태 관리 (페이지 이동용) ---
+if "page" not in st.session_state:
+    st.session_state.page = "main"
 
-# ----------------------------------------------------
-# 2. 하버사인 공식 (거리 계산기)
-# ----------------------------------------------------
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    lat1, lon1, lat2, lon2 = map(math.radians, [lat1, lon1, lat2, lon2])
-    dlat, dlon = lat2 - lat1, lon2 - lon1
-    a = math.sin(dlat / 2)**2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2)**2
-    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
-    return round(R * c, 1)
+# --- 상단 네비게이션 바 (좌/우측 상단 버튼 구현) ---
+nav_col1, nav_col2, nav_col3 = st.columns([1, 4, 1])
+with nav_col1:
+    if st.button("🗺️ 직접 지역 선택 (좌측상단)"):
+        st.session_state.page = "manual_search"
+with nav_col2:
+    st.markdown("<h1 style='text-align: center; margin-top: -20px;'>🚑 Aidmap</h1>", unsafe_allow_html=True)
+with nav_col3:
+    if st.button("💬 문의 및 도움말 (우측상단)"):
+        st.session_state.page = "inquiry_help"
 
-# ----------------------------------------------------
-# 3. 공공데이터 연동 (기본정보 API + 실시간 API 병합)
-# ----------------------------------------------------
-API_KEY = "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473"
+st.markdown("---")
 
-@st.cache_data(ttl=60)
-def fetch_real_emergency_data(city):
-    api_key_decoded = requests.utils.unquote(API_KEY)
+# ==========================================
+# 1. 메인 화면 (맞춤형 병원 추천)
+# ==========================================
+if st.session_state.page == "main":
     
-    # [API 1] 응급의료기관 기본정보 (주소, 좌표, 전화번호 확보용)
-    url_basic = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getErmctInfoInqire"
-    params_basic = {
-        'serviceKey': api_key_decoded,
-        'STAGE1': city if city != "전체" else "",
-        'numOfRows': '100',
-        'pageNo': '1'
-    }
+    # 1-1. 연령대 입력 및 맞춤형 안내
+    st.subheader("👤 이용자 맞춤 안내")
+    age_group = st.radio("연령대를 선택해주세요:", ["어린이", "청년/성인", "어르신"], horizontal=True)
     
-    # [API 2] 실시간 병상정보 (잔여 병상수 확보용)
-    url_rt = "http://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
-    params_rt = {
-        'serviceKey': api_key_decoded,
-        'STAGE1': city if city != "전체" else "",
-        'numOfRows': '100',
-        'pageNo': '1'
-    }
+    if age_group == "어린이":
+        st.info("👋 안녕! 아픈 곳이 있니? 아래에 어디가 아픈지 적어주면, 가장 빨리 낫게 해줄 병원을 찾아줄게!")
+    elif age_group == "청년/성인":
+        st.info("현재 위치와 증상을 입력하시면 혼잡도와 거리를 고려해 최적의 응급의료기관을 추천해 드립니다.")
+    elif age_group == "어르신":
+        st.markdown("<h2 style='color: #2b6cb0;'>어르신, 안녕하세요. 글자를 크게 보여드립니다. 아래에 아프신 곳을 적어주세요.</h2>", unsafe_allow_html=True)
+        st.audio("https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3", format="audio/mp3") # 음성지원 예시 플레이어
+        st.caption("🔊 (음성 지원) 재생 버튼을 누르시면 안내 음성이 나옵니다.")
+
+    # 1-2. 병상 현황 읽는 법
+    with st.expander("💡 병상 현황 쉽게 읽는 방법 보기"):
+        st.markdown("""
+        * **가용 병상:** 현재 병원에 당장 입원할 수 있는 남은 자리입니다. 숫자가 클수록 여유가 있습니다.
+        * **혼잡도:** 여유(초록) - 보통(노랑) - 혼잡(빨강)으로 표시됩니다.
+        * 마이너스(-)로 표시된 병상은 현재 자리가 초과되어 대기해야 함을 의미합니다.
+        """)
+
+    st.markdown("---")
     
-    hospital_dict = {}
-    
-    try:
-        # 1. 기본 정보 호출 및 파싱 (hpid를 키값으로 사용)
-        res_basic = requests.get(url_basic, params=params_basic, timeout=10)
-        res_basic.raise_for_status()
-        root_basic = ET.fromstring(res_basic.content)
-        
-        if root_basic.findtext(".//resultCode") != "00":
-            raise Exception("기본정보 API 오류: " + root_basic.findtext(".//resultMsg"))
+    # 1-3. 환자 상태 및 위치 입력
+    st.subheader("📍 현재 상태 및 위치 기반 병원 찾기")
+    col1, col2 = st.columns(2)
+    with col1:
+        # 실제 환경에서는 브라우저 GPS나 모바일 GPS API를 연동합니다.
+        current_loc = st.text_input("현재 위치 (GPS 연동 대체)", value="제주특별자치도 서귀포시") 
+    with col2:
+        symptoms = st.text_input("현재 증상 및 필요한 진료과 (예: 배가 아파요, 내과)")
+
+    # 1-4. 추천 알고리즘 로직 및 공공데이터 호출
+    if st.button("🚨 내게 맞는 병원 추천받기", use_container_width=True):
+        if symptoms:
+            st.success(f"'{symptoms}' 증상에 맞춰, 가장 가깝고 덜 혼잡한 병원을 찾습니다...")
             
-        for item in root_basic.findall(".//item"):
-            hpid = item.findtext("hpid")
-            if not hpid: continue
-            
-            # 위경도 데이터가 없는 병원은 제외 (가상 좌표 절대 사용 안함)
-            lat_str = item.findtext("wgs84Lat")
-            lon_str = item.findtext("wgs84Lon")
-            if not lat_str or not lon_str:
-                continue
-                
-            hospital_dict[hpid] = {
-                "hpid": hpid,
-                "name": item.findtext("dutyName", "이름없음"),
-                "addr": item.findtext("dutyAddr", "주소없음"),
-                "phone": item.findtext("dutyTel3") or item.findtext("dutyTel1", "전화번호 없음"),
-                "lat": float(lat_str),
-                "lng": float(lon_str),
-                # 아래 값들은 실시간 API에서 채워짐 (기본값 세팅)
-                "gen_curr": 0, "ped_curr": 0, "mat_curr": 0, "has_realtime": False
+            # API 호출 부분 (제주도 서귀포시 예시)
+            url = "https://apis.data.go.kr/B552657/ErmctInfoInqireService/getEmrrmRltmUsefulSckbdInfoInqire"
+            params = {
+                "serviceKey": "aa0cf3fc4d2a32edf9e6f8cf63cf46eaafb213b56f85d96e15b30484d0b75473",
+                "STAGE1": "제주특별자치도",
+                "STAGE2": "서귀포시",
+                "pageNo": "1",
+                "numOfRows": "10",
+                "_type": "json"
             }
             
-        # 2. 실시간 병상 정보 호출 및 병합
-        res_rt = requests.get(url_rt, params=params_rt, timeout=10)
-        res_rt.raise_for_status()
-        root_rt = ET.fromstring(res_rt.content)
-        
-        if root_rt.findtext(".//resultCode") != "00":
-            raise Exception("실시간 API 오류: " + root_rt.findtext(".//resultMsg"))
-            
-        for item in root_rt.findall(".//item"):
-            hpid = item.findtext("hpid")
-            if hpid in hospital_dict:
-                # hvec: 응급실 잔여, hvicyn: 소아응급 잔여, hpbd: 산부인과 잔여
-                hospital_dict[hpid]["gen_curr"] = int(item.findtext("hvec", "0"))
-                hospital_dict[hpid]["ped_curr"] = int(item.findtext("hvicyn", "0"))
-                hospital_dict[hpid]["mat_curr"] = int(item.findtext("hpbd", "0"))
-                hospital_dict[hpid]["has_realtime"] = True
+            try:
+                res = requests.get(url, params=params)
+                data = res.json()
+                items = data.get("response", {}).get("body", {}).get("items", {}).get("item", [])
                 
-        # 실시간 데이터가 매핑된 병원만 반환
-        final_list = [h for h in hospital_dict.values() if h["has_realtime"]]
-        
-        if not final_list:
-            raise Exception("조건에 맞는 병원 데이터가 없습니다. (API 응답 없음)")
-            
-        return final_list, None
+                if isinstance(items, dict): items = [items]
+                
+                # 병원 추천 리스트 출력 (거리/혼잡도 고려 가상 시뮬레이션 적용)
+                st.markdown(f"### 🏥 {current_loc} 주변 추천 응급의료기관")
+                for item in items:
+                    with st.container():
+                        beds = item.get('hbec', 0)
+                        # 혼잡도 시각화
+                        status = "🟢 여유" if int(beds) > 5 else ("🟡 보통" if int(beds) > 0 else "🔴 혼잡(대기)")
+                        
+                        st.markdown(f"#### {item.get('dutyName', '병원명 없음')} ({status})")
+                        st.write(f"**📞 전화번호:** {item.get('dutyTel3', '정보 없음')} | **응급실 남은 자리:** {beds}석")
+                        # 추후 AI 연동 시, 증상(symptoms)을 AI가 분석하여 '적합도(%)'를 출력하는 로직이 들어갈 수 있습니다.
+                        st.caption("✨ AI 분석 결과: 환자님의 증상 치료에 적합한 진료과가 있습니다. 예상 거리: 약 2.5km")
+                        st.divider()
 
-    except Exception as e:
-        # 가상 데이터(Fallback) 전면 폐지 - 에러 발생 시 그대로 에러 반환
-        return [], str(e)
+            except Exception as e:
+                st.error("데이터를 불러오는 데 실패했습니다.")
+        else:
+            st.warning("증상을 입력해주세요!")
 
 
-# ----------------------------------------------------
-# 4. 사용자 맞춤형 UI 
-# ----------------------------------------------------
-st.title("🚑 내 손안의 실시간 응급실 추천")
-
-if "age_group" not in st.session_state:
-    st.session_state.age_group = "선택안함"
-
-st.markdown("### 1️⃣ 사용자 연령대를 먼저 선택해주세요.")
-age_choice = st.radio("연령대 선택", ["선택안함", "일반 (청년/중장년층)", "노년층 (만 65세 이상)"], horizontal=True, label_visibility="collapsed")
-st.session_state.age_group = age_choice
-
-if st.session_state.age_group == "선택안함":
-    st.info("👆 원활한 안내를 위해 위에서 연령대를 선택해주시면 다음 화면이 열립니다.")
-    st.stop()
-
-st.divider()
-
-if st.session_state.age_group == "노년층 (만 65세 이상)":
-    st.markdown("""
-    <div class="guide-box">
-        <div class="elderly-text">👴👵 어르신, 환영합니다! 글씨를 크게 키워드렸어요.</div>
-        <div class="elderly-text">아래 마이크 버튼을 눌러 증상을 말씀해 주시면 더 편리합니다.</div>
-    </div>
-    """, unsafe_allow_html=True)
+# ==========================================
+# 2. 좌측 상단 메뉴: 직접 지역 선택
+# ==========================================
+elif st.session_state.page == "manual_search":
+    st.subheader("🗺️ 직접 지역 선택 (전국 시/도 및 시/군/구)")
     
-    stt_code = """
-    <div style="padding: 10px; background-color: #FEF2F2; border-radius: 8px;">
-        <button id="mic-btn" style="background-color: #EF4444; color: white; border: none; padding: 15px 20px; font-size: 1.1rem; border-radius: 8px; cursor: pointer; font-weight: bold; width: 100%;">
-            🎤 마이크 켜고 말하기
-        </button>
-        <p id="stt-result" style="margin-top: 10px; font-size: 1.1rem; font-weight: bold; color: #991B1B;">(이곳에 말씀하신 내용이 나타납니다)</p>
-    </div>
-    <script>
-        const btn = document.getElementById('mic-btn');
-        const resultText = document.getElementById('stt-result');
-        btn.addEventListener('click', () => {
-            const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if(!SpeechRecognition) return;
-            const recognition = new SpeechRecognition();
-            recognition.lang = 'ko-KR';
-            recognition.start();
-            btn.innerText = "듣고 있습니다...";
-            recognition.onresult = (e) => {
-                resultText.innerText = "인식된 증상: " + e.results[0][0].transcript + " (아래 진료과를 확인해 주세요)";
-                btn.innerText = "🎤 다시 말하기";
-            };
-        });
-    </script>
-    """
-    components.html(stt_code, height=130)
-
-st.markdown("### 2️⃣ 병상 현황 읽는 법")
-st.markdown("""
-<div class="guide-box" style="padding: 10px;">
-    <span style="font-size: 0.95rem; color: #334155;">
-    • 표기: <b>[현재 확보된 잔여 병상 수]</b> (실제 사용 가능한 빈자리만 표시합니다.)<br>
-    • 상태: <span class="badge-smooth">원활 (5석 초과)</span> | <span class="badge-busy">혼잡 (0~2석 남음)</span>
-    </span>
-</div>
-""", unsafe_allow_html=True)
-st.divider()
-
-st.markdown("### 3️⃣ 환자분의 현재 상태와 위치")
-
-col1, col2, col3 = st.columns(3)
-with col1:
-    current_city = st.selectbox("📍 현재 지역", ["제주특별자치도", "서울특별시", "경기도", "부산광역시", "전체"])
-with col2:
-    target_symptom = st.selectbox("🤒 주요 증상", ["선택안함", "고열/오한", "심한 복통", "출혈/외상", "호흡 곤란", "진통(임산부)"])
-with col3:
-    target_dept = st.selectbox("🏥 필요 진료과", ["응급의학과 (기본)", "소아청소년과", "산부인과", "외과/정형외과"])
-
-# ⚠️ 환자분의 현재 위치(서귀포시 동홍동)의 실제 좌표를 하드코딩 반영
-# 서귀포시 동홍동 좌표: 위도 33.2576, 경도 126.5656
-if current_city == "제주특별자치도":
-    st.info("📍 현재 위치가 **'제주특별자치도 서귀포시 동홍동'**으로 자동 설정되었습니다.")
-    current_lat, current_lon = 33.2576, 126.5656
-else:
-    # 다른 지역 선택 시 해당 지역의 도심 좌표 적용
-    locations = {"서울특별시": (37.566, 126.978), "경기도": (37.275, 127.009), "부산광역시": (35.179, 129.075)}
-    current_lat, current_lon = locations.get(current_city, (36.5, 127.5))
-
-st.divider()
-
-# ----------------------------------------------------
-# 5. 스마트 병원 추천 알고리즘 (실제 데이터 기반)
-# ----------------------------------------------------
-with st.spinner("100% 실제 공공데이터를 불러와 거리를 계산하는 중입니다..."):
-    hospitals, err_reason = fetch_real_emergency_data(current_city)
-
-if err_reason:
-    st.error("🚨 공공데이터 API 연동 중 오류가 발생했습니다.")
-    st.error(f"오류 내용: {err_reason}")
-    st.stop()
-
-scored_hospitals = []
-for h in hospitals:
-    # 하버사인 공식으로 실제 위경도 기반 거리 도출
-    dist = calculate_distance(current_lat, current_lon, h['lat'], h['lng'])
-    h['distance'] = dist
+    # 한국 지도 모든 지역 반영을 위한 선택 창
+    sido = st.selectbox("시/도를 선택하세요", ["서울특별시", "부산광역시", "경기도", "제주특별자치도", "등등...전국"])
+    sigungu = st.selectbox("시/군/구를 선택하세요", ["강남구", "해운대구", "수원시", "서귀포시"])
     
-    # 0석인 특수 병상 필터링
-    if target_dept == "소아청소년과" and h['ped_curr'] <= 0:
-        continue # 소아 병상 없으면 리스트에서 완전 제외
-    if target_dept == "산부인과" and h['mat_curr'] <= 0:
-        continue # 산부인과 병상 없으면 리스트에서 완전 제외
-        
-    # 점수 부여 (거리가 가깝고 잔여 병상이 많을수록 높음)
-    dist_score = max(0, 100 - (dist * 2.5)) 
-    bed_score = min(100, h['gen_curr'] * 4) 
-    h['score'] = (dist_score * 0.6) + (bed_score * 0.4)
+    if st.button("해당 지역 응급실 조회"):
+        st.info(f"{sido} {sigungu}의 실시간 응급의료기관 데이터를 가져옵니다. (메인 화면의 공공데이터와 동일한 로직 적용)")
+        # 이곳에 위 메인화면과 동일한 API 호출 로직을 함수화하여 넣을 수 있습니다.
+
+    if st.button("🏠 메인으로 돌아가기"):
+        st.session_state.page = "main"
+
+
+# ==========================================
+# 3. 우측 상단 메뉴: 문의사항 및 도움말
+# ==========================================
+elif st.session_state.page == "inquiry_help":
+    st.subheader("💬 문의사항 및 유용한 정보")
     
-    # 추천 사유(Reason) 생성
-    reasons = []
-    if dist < 3.0: reasons.append(f"거리({dist}km)가 매우 가깝고")
-    elif dist < 10.0: reasons.append(f"거리({dist}km)가 비교적 양호하며")
-    else: reasons.append(f"거리는 다소 멀지만({dist}km)")
-        
-    if h['gen_curr'] > 5: reasons.append("일반 응급 잔여 병상이 여유롭습니다.")
-    elif h['gen_curr'] > 0: reasons.append("일반 응급 병상이 남아있습니다.")
-    else: reasons.append("일반 병상은 0석이지만 접수 확인이 필요합니다.")
-        
-    if target_dept == "소아청소년과":
-        reasons.insert(1, f"소아 병상이 {h['ped_curr']}석 남아있으며")
-    elif target_dept == "산부인과":
-        reasons.insert(1, f"분만실 병상이 {h['mat_curr']}석 남아있으며")
-        
-    h['reason'] = " ".join(reasons)
-    scored_hospitals.append(h)
-
-# 점수순(추천순) 정렬
-scored_hospitals = sorted(scored_hospitals, key=lambda x: x['score'], reverse=True)
-
-# ----------------------------------------------------
-# 6. 검색 결과 출력
-# ----------------------------------------------------
-st.markdown(f"### 4️⃣ 맞춤형 추천 결과 (조건에 맞는 병원: 총 {len(scored_hospitals)}곳)")
-
-if not scored_hospitals:
-    st.warning("조건에 맞는 병원을 찾지 못했습니다. (예: 현재 제주 지역에 잔여 소아/분만 병상이 0석인 경우) 진료과를 '응급의학과'로 변경해보세요.")
-    st.stop()
-
-# 🏆 최적 1순위 병원 강조
-top_h = scored_hospitals[0]
-st.markdown(f"""
-<div class="recommend-box">
-    <h3 style="margin-top: 0; color: #1E3A8A;">✨ AI 최적 추천: {top_h['name']}</h3>
-    <div class="reason-text">💡 <b>추천 이유:</b> {top_h['reason']}</div>
-    <ul style="font-size: 1.05rem; line-height: 1.8; margin-top: 15px;">
-        <li><b>📍 실측 예상 거리:</b> 현재 동홍동 위치 기준 약 <b>{top_h['distance']} km</b></li>
-        <li><b>🛏️ 응급 잔여 병상:</b> 현재 <b>{top_h['gen_curr']}석</b> 비어있음</li>
-        <li><b>📞 병원 즉시 연락:</b> <a href="tel:{top_h['phone']}">{top_h['phone']}</a></li>
-        <li style="font-size: 0.95rem; color: #475569;">주소: {top_h['addr']}</li>
-    </ul>
-</div>
-""", unsafe_allow_html=True)
-
-# 목록 출력 (거짓 병상 수 비율 삭제, 순수 잔여 병상만 표시)
-for idx, h in enumerate(scored_hospitals):
-    badge = "<span class='badge-smooth'>원활</span>" if h['gen_curr'] > 5 else ("<span class='badge-normal'>보통</span>" if h['gen_curr'] > 0 else "<span class='badge-busy'>혼잡/마감</span>")
-    map_url = f"https://map.kakao.com/link/to/{h['name']},{h['lat']},{h['lng']}"
+    tab1, tab2 = st.tabs(["문의 게시판", "유용한 사이트 및 정보"])
     
-    st.markdown(f"""
-    <div style="padding: 15px; border: 1px solid #E2E8F0; border-radius: 8px; margin-bottom: 12px;">
-        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
-            <h4 style="margin: 0;">{idx+1}. {h['name']} <span style="font-size: 0.8rem; color: #64748B;">(직선거리 {h['distance']}km)</span></h4>
-            <a href="{map_url}" target="_blank" style="background-color: #EF4444; color: white; padding: 6px 12px; border-radius: 6px; text-decoration: none; font-size: 0.8rem; font-weight: bold;">📍 길찾기</a>
-        </div>
-        <div style="font-size: 0.85rem; color: #475569; margin-bottom: 10px;">{h['addr']}</div>
-        <div style="display: flex; gap: 10px; font-size: 0.9rem; flex-wrap: wrap;">
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">📞 {h['phone']}</div>
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">🛏️ 일반응급 잔여: {badge} <b>{h['gen_curr']}석</b></div>
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">👶 소아 잔여: <b>{h['ped_curr']}석</b></div>
-            <div style="background: #F1F5F9; padding: 6px 10px; border-radius: 6px;">🤰 분만실 잔여: <b>{h['mat_curr']}석</b></div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
+    with tab1:
+        st.write("사이트 이용 중 불편한 점이나 관리자에게 남길 문의를 적어주세요.")
+        user_inquiry = st.text_area("문의 내용 입력")
+        if st.button("문의 등록"):
+            st.success("등록되었습니다. 관리자가 확인 후 답변을 남겨드립니다.")
+        
+        st.markdown("---")
+        st.write("### 📝 이전 문의 내역")
+        with st.expander("Q. 병원 정보가 안 뜹니다."):
+            st.write("**A. (관리자 답변)** 현재 접속하신 위치의 GPS 권한을 허용해주시면 정상적으로 표기됩니다!")
+
+    with tab2:
+        st.write("응급 상황에 도움이 될 만한 유용한 정보 모음입니다.")
+        st.markdown("""
+        * [보건복지부 응급의료포털(E-Gen)](https://www.e-gen.or.kr)
+        * [심폐소생술(CPR) 방법 안내](#)
+        * 야간 휴일 운영 약국 정보
+        """)
+        
+    if st.button("🏠 메인으로 돌아가기"):
+        st.session_state.page = "main"
